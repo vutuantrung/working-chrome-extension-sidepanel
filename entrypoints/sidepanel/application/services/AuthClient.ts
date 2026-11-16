@@ -12,7 +12,7 @@ export type AuthLoginResult = {
 type AuthResponse<T> = { success: true; data: T } | { success: false; error?: string; code?: string };
 
 export class AuthClient {
-  constructor(private readonly runtime: ExtensionRuntimePort, private readonly timeoutMs = 125_000) {}
+  constructor(private readonly runtime: ExtensionRuntimePort, private readonly timeoutMs = 125_000) { }
 
   private async request<T>(type: string, inputs?: Record<string, unknown>): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -25,7 +25,9 @@ export class AuthClient {
         timeout,
       ]);
       if (!response || response.success !== true || response.data == null) {
-        throw new Error(response?.success === false ? response.error || "Authentication failed" : "Invalid authentication response");
+        throw new Error(response?.success === false
+          ? response.error || "Authentication failed"
+          : "Invalid authentication response");
       }
       return response.data;
     } finally {

@@ -1,6 +1,6 @@
 import { externalServiceClient } from "../../application/services/SidepanelServices";
 
-import type { GetProfileCasesResponse, ProfileCase } from "../../types/types";
+import type { GetProfileCasesResponse, ProfileCase, RequestResult } from "../../types/types";
 
 type EvidenceMetadata = { name: string; description: string; capture_time: number };
 type CaseInfo = Partial<Pick<ProfileCase, "name" | "platform" | "profile_url" | "origin_url" | "description">>;
@@ -16,4 +16,4 @@ export const patchCaseInfo = (profileCaseId: string, info: CaseInfo, updateImage
   externalServiceClient.request<ProfileCase>("patchCaseInfo", { profileCaseId, info, updateImages, deleteIds });
 
 export const postCaseImages = (profileCaseId: string, dataUrls: string[], metadata: EvidenceMetadata[]) =>
-  externalServiceClient.request<true>("postCaseImages", { profileCaseId, dataUrls, metadata });
+  externalServiceClient.request<RequestResult<boolean>>("postCaseImages", { profileCaseId, dataUrls, metadata });

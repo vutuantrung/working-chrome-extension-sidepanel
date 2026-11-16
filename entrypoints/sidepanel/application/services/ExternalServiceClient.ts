@@ -35,9 +35,6 @@ export class ExternalServiceClient {
       if (result && typeof result === "object" && "success" in result && result.success === false) {
         throw new Error("Background service request failed");
       }
-      if (serviceName === "postCaseImages" && result !== true) {
-        throw new Error("Background did not acknowledge image upload");
-      }
       if (result == null) {
         throw new Error("Background returned no service response");
       }

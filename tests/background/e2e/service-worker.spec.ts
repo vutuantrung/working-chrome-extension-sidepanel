@@ -72,8 +72,8 @@ test("creates and removes genuine Chrome alarms", async () => {
 test("can interact with tabs without opening the Side Panel", async () => {
   const opened = await worker.evaluate(async () => {
     const tab = await chrome.tabs.create({ url: "about:blank", active: false });
-    const found = await chrome.tabs.get(tab.id);
-    await chrome.tabs.remove(tab.id);
+    const found = await chrome.tabs.get(tab.id!);
+    chrome.tabs.remove(tab.id!);
     return { id: found.id, url: found.url };
   });
   expect(opened.id).toEqual(expect.any(Number));

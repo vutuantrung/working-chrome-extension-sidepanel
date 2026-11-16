@@ -2,6 +2,10 @@ export type ImageItem =
     | { kind: "saved"; image: SavedImage }
     | { kind: "pending"; dataUrl: string; timestamp: number };
 
+export type RequestResult<T> =
+    | { success: true; data: T }
+    | { success: false; error?: string };
+
 export type PlatformId = "facebook" | "tiktok" | "x" | "threads" | "youtube";
 
 export type PlatformObject = {
