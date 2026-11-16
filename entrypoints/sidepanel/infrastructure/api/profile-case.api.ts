@@ -1,68 +1,19 @@
-// import { http } from "../../helpers/helpers-http";
-// import { GetProfileCasesResponse, ProfileCase } from "../../types/types";
-// import { dataUrlToBlob } from "../../helpers/helpers";
+import { externalServiceClient } from "../../application/services/SidepanelServices";
 
-// export const getProfileCases = async (filter?: any) => {
-//     const response = await http.get('/profile-cases', {
-//         params: {
-//             ...(filter && { filter: JSON.stringify(filter) }),
-//         },
-//     });
-//     return response.data as GetProfileCasesResponse;
-// }
+import type { GetProfileCasesResponse, ProfileCase } from "../../types/types";
 
-// export const createProfileCase = async (
-//     profileCase: ProfileCase,
-//     dataUrls: string[],
-//     metadata: { name: string; description: string; capture_time: number }[],
-// ) => {
-//     const form = new FormData();
+type EvidenceMetadata = { name: string; description: string; capture_time: number };
+type CaseInfo = Partial<Pick<ProfileCase, "name" | "platform" | "profile_url" | "origin_url" | "description">>;
+type ImageUpdate = { id: string; name: string; description: string };
 
-//     form.append("profileCase", JSON.stringify({
-//         name: profileCase.name,
-//         platform: profileCase.platform,
-//         profile_url: profileCase.profile_url,
-//         origin_url: profileCase.origin_url,
-//         description: profileCase.description
-//     }));
-//     form.append("evidens", JSON.stringify(metadata));
+export const getProfileCases = (filter?: any) =>
+  externalServiceClient.request<GetProfileCasesResponse>("getProfileCases", { filter });
 
-//     dataUrls.forEach((dataUrl, i) => {
-//         const blob = dataUrlToBlob(dataUrl);
-//         form.append("files", blob, `screenshot-${Date.now()}-${i}.png`);
-//     });
+export const createProfileCase = (profileCase: ProfileCase, dataUrls: string[], metadata: EvidenceMetadata[]) =>
+  externalServiceClient.request<ProfileCase>("createProfileCase", { profileCase, dataUrls, metadata });
 
-//     const response = await http.post('/profile-cases', form)
-//     return response.data as ProfileCase
-// }
+export const patchCaseInfo = (profileCaseId: string, info: CaseInfo, updateImages: ImageUpdate[], deleteIds: string[]) =>
+  externalServiceClient.request<ProfileCase>("patchCaseInfo", { profileCaseId, info, updateImages, deleteIds });
 
-// export const patchCaseInfo = async (
-//     profileCaseId: string,
-//     info: { name?: string; platform?: string; profile_url?: string; origin_url?: string; description?: string; },
-//     updateImages: { id: string; name: string; description: string }[],
-//     deleteIds: string[]
-// ) => {
-//     const response = await http.patch(`/profile-cases/${profileCaseId}`, {
-//         ...info,
-//         update_images: updateImages,
-//         delete_ids: deleteIds
-//     })
-//     return response.data as ProfileCase
-// }
-
-// export const postCaseImages = async (
-//     profileCaseId: string,
-//     dataUrls: string[],
-//     metadata: { name: string; description: string; capture_time: number }[]
-// ) => {
-//     const form = new FormData();
-//     form.append("evidens", JSON.stringify(metadata));
-//     await Promise.all(
-//         dataUrls.map(async (dataUrl, i) => {
-//             const blob = dataUrlToBlob(dataUrl);
-//             form.append("files", blob, `screenshot-${Date.now()}-${i}.png`);
-//         })
-//     );
-
-//     await http.post(`/profile-cases/${profileCaseId}/images`, form)
-// }
+export const postCaseImages = (profileCaseId: string, dataUrls: string[], metadata: EvidenceMetadata[]) =>
+  externalServiceClient.request<void>("postCaseImages", { profileCaseId, dataUrls, metadata });

@@ -1,13 +1,8 @@
-// import * as extensionUserApi from "./extension-user.api";
-// import * as personaApi from "./persona.api";
-// import * as socialAccountApi from "./social-account.api";
-// import * as proxyApi from "./proxy.api";
-// import * as profileCaseApi from "./profile-case.api";
+import * as extensionUser from "./extension-user.api";
+import * as persona from "./persona.api";
+import * as socialAccount from "./social-account.api";
+import * as proxy from "./proxy.api";
+import * as profileCase from "./profile-case.api";
+import * as sourceMember from "./source-member.api";
 
-// export default {
-//     extensionUser: { ...extensionUserApi },
-//     persona: { ...personaApi },
-//     socialAccount: { ...socialAccountApi },
-//     proxy: { ...proxyApi },
-//     profileCase: { ...profileCaseApi },
-// }
+export default { extensionUser, persona, socialAccount, proxy, profileCase, sourceMember };

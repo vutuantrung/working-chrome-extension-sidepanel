@@ -1,22 +1,6 @@
-// import { http } from "../../helpers/helpers-http";
+import { externalServiceClient } from "../../application/services/SidepanelServices";
 
-// export const getProxiesByPersona = async (personaId: string, filter?: any) => {
-//     const response = await http.get(
-//         "/proxies", {
-//         params: {
-//             filter: JSON.stringify({
-//                 offset: 0,
-//                 limit: 100,
-//                 where: { persona_id: personaId },
-//                 ...(filter || {}),
-//             }),
-//         },
-//     });
-
-//     return response.data;
-// };
-
-// export const getProxyInfo = async (proxy_id: string) => {
-//     const response = await http.get(`/proxies/${proxy_id}`);
-//     return response.data;
-// };
+export const getProxiesByPersona = (personaId: string, filter?: any) =>
+  externalServiceClient.request("getProxiesByPersona", { personaId, filter });
+export const getProxyInfo = (proxy_id: string) =>
+  externalServiceClient.request("getProxyInfo", { proxy_id });

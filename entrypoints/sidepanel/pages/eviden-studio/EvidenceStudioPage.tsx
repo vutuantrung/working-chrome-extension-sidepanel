@@ -1,3 +1,4 @@
+import api from "../../infrastructure/api";
 import WorkspacePageHeader from "../../components/WorkspacePageHeader";
 import "../../assets/css/features/eviden-studio.css";
 import { DEFAULT_CASE_ID, DEFAULT_PAGE_SIZE } from "../../helpers/constants";
@@ -54,7 +55,7 @@ function EvidenStudio({ platform }: EvidenStudioProps) {
       });
       setProfileCases(data)
     }
-    fetchCases()
+    void fetchCases().catch(() => setProfileCases(undefined));
   }, [refresh, filter])
 
   const [selectedCase, setSelectedCase] = useState(defaultCase)

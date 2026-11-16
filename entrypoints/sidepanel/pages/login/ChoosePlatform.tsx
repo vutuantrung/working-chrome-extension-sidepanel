@@ -1,3 +1,4 @@
+import api from "../../infrastructure/api";
 import WorkspacePageHeader from "../../components/WorkspacePageHeader";
 import "../../assets/css/features/platform.css";
 import React, { useEffect, useState } from "react";

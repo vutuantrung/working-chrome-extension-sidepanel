@@ -17,6 +17,7 @@ import { BrowserProxyAdapter } from "../../infrastructure/web/BrowserProxyAdapte
 import { BrowserScriptingAdapter } from "../../infrastructure/web/BrowserScriptingAdapter";
 
 import { ExtensionCommandService } from "./ExtensionCommandService";
+import { ExternalServiceClient } from "./ExternalServiceClient";
 import { ScreenshotCaptureService } from "./ScreenshotCaptureService";
 import type {
   AppStoragePort,
@@ -63,6 +64,7 @@ export const browserScripting: BrowserScriptingPort = isChromeExtensionEnvironme
   : new BrowserScriptingAdapter();
 
 export const extensionCommands = new ExtensionCommandService(extensionRuntime);
+export const externalServiceClient = new ExternalServiceClient(extensionRuntime);
 export const screenshotCapture = new ScreenshotCaptureService(
   browserTabs,
   browserScripting,

@@ -1,10 +1,10 @@
+import { getMemberSourcesGroup } from "../../infrastructure/api/source-member.api";
 import { useState, useEffect } from "react";
 import { FiFilter, FiRefreshCw, FiAlertCircle, FiLayers, FiList } from "../../assets/constants/icons";
 import { FaChevronLeft, FaChevronRight } from "../../assets/constants/icons";
 
-import { appStorage } from "../../../../entrypoints/sidepanel/application/services/SidepanelServices";
+import { extensionStorage } from "../../application/services/SidepanelServices";
 import { useAuth } from "../../contexts/AuthContext";
-import { User } from "../../types/types";
 
 import { FB_GROUP_TYPE, PLATFORM_OPTIONS, localizeOptions, JOIN_STATUS_TAB } from "../../helpers/constants";
 import { MultiSelectFilter, SearchInput } from "../../components/ui";
@@ -24,7 +24,7 @@ export interface GroupPageProps {
 }
 
 function GroupPage({ dataSource = getMemberSourcesGroup }: GroupPageProps = {}) {
-  const { user, loading: authLoading } = useAuth();
+  const { user, facebookAccounts, loading: authLoading } = useAuth();
   const { t, language } = useTranslation();
   const [profiles, setProfiles] = useState<any>([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -43,29 +43,20 @@ function GroupPage({ dataSource = getMemberSourcesGroup }: GroupPageProps = {}) 
     setLoading(true);
     setError(null);
     try {
-      let assigneeId = user?.id;
-      if (!assigneeId) {
-        const storedUser = await appStorage.getItem<User>("local:user");
-        assigneeId = storedUser?.id;
+      // Gallery supplies its own data source; production needs an actual account ID.
+      let accountId = user?.id ?? "";
+      if (dataSource === getMemberSourcesGroup) {
+        const mode = await extensionStorage.getValue<{ account_id?: string }>("fbLoginMode");
+        accountId = mode?.account_id ??
+          (facebookAccounts.length === 1 ? facebookAccounts[0].account_id : "");
+        if (!accountId) throw new Error("No selected social account");
       }
-
-      const id = "some_id";
       const limit = PAGE_SIZE;
       const offset = (page - 1) * PAGE_SIZE;
 
-      // const res = await dataSource(
-      //   assigneeId,
-      //   undefined,
-      //   debouncedSearch || undefined,
-      //   offset,
-      //   limit,
-      //   selectedPlatforms.length > 0 ? selectedPlatforms : undefined,
-      //   selectedTypes.length > 0 ? selectedTypes : undefined,
-      // );
-
       const res = await dataSource(
-        id,
-        statusFilter,
+        accountId,
+        statusFilter === "all" ? undefined : statusFilter,
         debouncedSearch || undefined,
         offset,
         limit,
@@ -103,7 +94,10 @@ function GroupPage({ dataSource = getMemberSourcesGroup }: GroupPageProps = {}) 
     }
   }, [
     user?.id,
+    facebookAccounts,
     authLoading,
+    statusFilter,
+    dataSource,
     page,
     debouncedSearch,
     selectedPlatforms,

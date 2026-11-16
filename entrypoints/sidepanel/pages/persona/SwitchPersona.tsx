@@ -1,3 +1,4 @@
+import api from "../../infrastructure/api";
 import "../../assets/css/pages/PersonaPage.css";
 import React, { useEffect, useState } from "react";
 import { localStorageService } from "../../../../entrypoints/sidepanel/application/services/SidepanelServices";

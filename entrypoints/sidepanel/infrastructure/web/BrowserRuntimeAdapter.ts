@@ -11,6 +11,9 @@ import type {
  */
 export class BrowserRuntimeAdapter implements ExtensionRuntimePort {
   async sendMessage<T = any>(message: RuntimeMessage): Promise<T> {
+    if (message.type === "CALL_EXTERNAL_SERVICE") {
+      throw new Error("Background runtime unavailable in standalone web mode");
+    }
     if (typeof window !== "undefined") {
       window.dispatchEvent(
         new CustomEvent("sidepanel:runtime-message", { detail: message }),

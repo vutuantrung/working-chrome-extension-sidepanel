@@ -15,7 +15,7 @@ import {
   localStorageService,
 } from "../../sidepanel/application/services/SidepanelServices";
 import type { BrowserCookie, CookieSetDetails, StorageChangeMap } from "../types/BrowserPorts";
-// import api from "../infrastructure/api"
+import api from "../infrastructure/api";
 import {
   getPlatformCookieDomains,
   SOCIAL_COOKIE_DOMAINS,

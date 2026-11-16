@@ -1,4 +1,4 @@
-import { AxiosError } from "axios";
+import api from "../../infrastructure/api";
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { ProfileCase } from "../../types/types";
 import {
@@ -296,11 +296,7 @@ export function useEvidenStudio({ selectedCase, onSaved }: UseEvidenStudioOption
       onSaved?.(updatedCase, selectedCase);
     } catch (err) {
       console.error("Save failed:", err);
-      if (err instanceof AxiosError) {
-        setError(`Save failed. ${err.response?.data?.error?.message ?? "Please try again."}`);
-      } else {
-        setError("Save failed. Please try again.");
-      }
+      setError("Save failed. Please try again.");
     } finally {
       setSaving(false);
     }
