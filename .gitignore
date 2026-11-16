@@ -1,3 +1,9 @@
+# custom
+public
+entrypoints/background/
+entrypoints/content/
+test-results/
+
 # Logs
 logs
 *.log
