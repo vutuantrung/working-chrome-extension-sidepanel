@@ -75,3 +75,27 @@ tests/background/sidepanel-api-contracts.test.ts: 22 parameterized wrapper tests
 - [ ] Resolve or explicitly accept blockers relevant to R1.
 
 R1 recommended first vertical slice: Authentication & Session. Keep runTimeOnMessageHandlerInternal as router; add business message type only if needed, delegate to focused handler; preserve existing transport and browser abstractions. No Background architecture changes. R0.3 is not fully passed until runtime gate closes.
+
+## Re-verification at latest checkpoint — 2026-11-16
+
+This addendum supersedes the historical counts and findings above, not the runtime gate.
+- Sidepanel: [5063c72](https://github.com/vutuantrung/working-chrome-extension-sidepanel/tree/5063c72370c917717d498acb4e340c0392a494f9)
+- Background: [5e93732](https://github.com/vutuantrung/working-chrome-extension-background/tree/5e9373283b9b48ccc6a81e21d922e26d6520f04c)
+- Static extraction from all six API client files and externalServiceHandler.ts: 21/21 operation names and exact destructured body key sets match; no missing wrappers. Historical 22-operation matrix superseded: getSocialAccountInfo removed symmetrically, group platform/type now forwarded, postCaseImages requires literal true acknowledgment (Background implementation returns true).
+- 9 ExtensionCommandService commands and 3 AuthClient commands all have matching dispatch cases in runtimeHandler.ts. CALL_EXTERNAL_SERVICE remains registered. AuthClient uses typed success/data envelopes; legacy external calls preserve raw payloads. No new message type required for verification.
+- Existing test inventory: 21 parameterized API wrapper cases, 5 external transport tests, 4 AuthClient tests, 5 Background auth handler tests. Reviewed source, not executed. Mock tests do not prove actual message router or browser integration.
+- Remaining blockers: the two projects are separate source trees; same-extension identity and generated manifest must be verified using the production assembly. Background legacy cache miss recursion/async listener registration and external HTTP rejection behavior remain. Group implementation still sample-based despite filter forwarding. Verify empty responses from other mutation endpoints and login/config/logout concurrency. Auth state restoration reads durable storage directly now, but subsequent legacy commands can still hit old cache path. New auth login serializes sign-ins only. Do not treat timeout as cancellation or retry mutation automatically.
+- Local attempt: Node and global tsc available, pnpm not on PATH; git ls-remote failed DNS resolution for github.com. GitHub connector reads available. No full compile/build/Vitest/Chrome execution possible in this session. No production source changes in this re-verification.
+
+### Runtime acceptance checklist (still open)
+| Gate | Expected evidence |
+|---|---|
+| G1 | Both repos pinned to compatible revisions; pnpm compile and background:test outputs for both |
+| G2 | Actual assembly build succeeds, generated manifest points to existing worker and sidepanel artifacts under one extension ID |
+| G3 | From actual Sidepanel: password/API-key login and AUTH_GET_STATE round trip with a test account; verify durable state and error response |
+| G4 | Stop/restart worker, then GET_SETTINGS and GET_USERINFO on cold/missing cache; verify no hang |
+| G5 | Legacy external API failure, missing receiver, unauthorized response; no false success or duplicate mutation |
+| G6 | Evidence upload explicit true ACK; session update/logout empty responses checked; group endpoint/sample issue documented or resolved |
+| G7 | Close/reopen Sidepanel; verify session and UI restoration; test concurrent login/logout in nonproduction environment |
+
+Status: static contracts verified, runtime gate OPEN. R1.1 is already implemented in current source; recommend completing G1–G4 before deeper auth migration. No Background refactor.
