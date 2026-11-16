@@ -16,4 +16,4 @@ export const patchCaseInfo = (profileCaseId: string, info: CaseInfo, updateImage
   externalServiceClient.request<ProfileCase>("patchCaseInfo", { profileCaseId, info, updateImages, deleteIds });
 
 export const postCaseImages = (profileCaseId: string, dataUrls: string[], metadata: EvidenceMetadata[]) =>
-  externalServiceClient.request<void>("postCaseImages", { profileCaseId, dataUrls, metadata });
+  externalServiceClient.request<true>("postCaseImages", { profileCaseId, dataUrls, metadata });

@@ -8,6 +8,7 @@ import {
 import { useNavigate } from "react-router-dom";
 import {
   appStorage,
+  authClient,
   browserCookies,
   browserTabs,
   extensionCommands,
@@ -16,6 +17,7 @@ import {
 } from "../../sidepanel/application/services/SidepanelServices";
 import type { BrowserCookie, CookieSetDetails, StorageChangeMap } from "../types/BrowserPorts";
 import api from "../infrastructure/api";
+import type { AuthLoginResult } from "../application/services/AuthClient";
 import {
   getPlatformCookieDomains,
   SOCIAL_COOKIE_DOMAINS,
@@ -1043,8 +1045,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       (async () => {
         try {
           const curExtensionId = extensionId || extensionCommands.getExtensionId()
-          const loginResponse = await api.extensionUser.loginWithApikeyApi(newApikey, curExtensionId);
-          await processLoginResponse(loginResponse, true);
+          const loginResponse = await authClient.loginByApiKey(newApikey, curExtensionId);
+          await applyAuthenticatedSession(loginResponse);
         } catch (err) {
           console.warn(
             "[AuthContext] apikey storage-change auto-login failed:",
@@ -1080,13 +1082,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         loginInFlight = true;
         console.log("[AuthContext] Polling found apikey — attempting auto-login");
         try {
-          const loginResponse = await api.extensionUser.loginWithApikeyApi(
+          const loginResponse = await authClient.loginByApiKey(
             apikey,
             extensionId || extensionCommands.getExtensionId(),
           );
           if (!isCancelled) {
-            await processLoginResponse(loginResponse, true);
-            // processLoginResponse calls setUser → triggers re-render →
+            await applyAuthenticatedSession(loginResponse);
+            // applyAuthenticatedSession calls setUser → triggers re-render →
             // useEffect cleanup fires → interval cleared automatically.
           }
         } catch (err) {
@@ -1109,69 +1111,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [user, extensionId]);
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // Shared post-login setup: processes the raw API response from either
-  // username/password or apikey login, sets all state, storage and sends
-  // background messages.  Business logic is identical for both paths.
-  // ──────────────────────────────────────────────────────────────────────────
-  const processLoginResponse = async (loginResponse: any, isApikeyLogin = false): Promise<boolean> => {
-    const serverSession =
-      loginResponse?.extension_session ||
-      (Array.isArray(loginResponse?.extension_sessions)
-        ? loginResponse.extension_sessions[0]
-        : null) ||
-      (Array.isArray(loginResponse?.extension_config?.extension_sessions)
-        ? loginResponse.extension_config.extension_sessions[0]
-        : null) ||
-      {};
-
-    const extensionConfigId =
-      loginResponse?.extension_config_id ??
-      serverSession?.extension_config_id ??
-      loginResponse?.extension_config?.id;
-
-    const newUser: User = {
-      id: loginResponse.id,
-      username: loginResponse.username,
-      name: loginResponse.display_name,
-      apikey: loginResponse.api_key || loginResponse.apikey,
-      tenants: loginResponse.tenant || loginResponse.tenants,
-      extension_session: {
-        ...serverSession,
-        extension_config_id: extensionConfigId,
-      },
-    };
-    await appStorage.setItem("local:user", newUser);
+  // Background authenticates, normalizes and persists the session.
+  // Persona, platform and proxy orchestration remain here until their migration.
+  const applyAuthenticatedSession = async (result: AuthLoginResult): Promise<boolean> => {
+    const { user: newUser, isApikeySession: apiKeySession, extensionConfig: extensionConfigInfo, configurationUnavailable } = result;
     setUser(newUser);
-    // Persist the apikey-session flag so it survives popup re-opens.
-    await appStorage.setItem("local:isApikeySession", isApikeyLogin);
-    setIsApikeySession(isApikeyLogin); // mark this session as apikey-based
-
-    const useExtensionConfig = hasExtensionConfigId(extensionConfigId);
+    setIsApikeySession(apiKeySession);
+    const useExtensionConfig = hasExtensionConfigId(newUser.extension_session?.extension_config_id);
 
     try {
       if (useExtensionConfig) {
-        const extensionConfigInfo = await api.extensionUser.getExtensionConfigInfo(
-          extensionConfigId,
-          { include: [{ relation: "extension_sessions" }] },
-        );
-
-        // Enrich extension_session if the signin response did not provide the full session
-        if (extensionConfigInfo?.extension_sessions?.[0]) {
-          const configSession = extensionConfigInfo.extension_sessions[0];
-          newUser.extension_session = {
-            ...configSession,
-            ...newUser.extension_session,
-            id: newUser.extension_session?.id || configSession.id,
-            extension_session_id: newUser.extension_session?.id || configSession.id,
-            extension_config_id: extensionConfigId,
-            extension_id: newUser.extension_session?.extension_id || configSession.extension_id,
-            automation: newUser.extension_session?.automation ?? configSession.automation ?? false,
-          };
-          await appStorage.setItem("local:user", newUser);
-          setUser(newUser);
-        }
-
+        if (configurationUnavailable) throw new Error("Extension configuration unavailable");
         await appStorage.setItem("local:extensionProxy", extensionConfigInfo?.proxy || {});
 
         const rawSocialAccounts: unknown[] = extensionConfigInfo?.social_accounts || [];
@@ -1234,18 +1184,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const checkAuthAndRestore = async () => {
     try {
-      const storedUser = await appStorage.getItem<User>("local:user");
+      const { user: storedUser, isApikeySession: storedIsApikeySession } = await authClient.getState();
       if (!storedUser) {
         // No stored session — try apikey auto-login before showing login screen.
         // The apikey is injected into chrome.storage.local by the desktop app.
         const apikey = await getStoredApikey();
         if (apikey) {
           try {
-            const loginResponse = await api.extensionUser.loginWithApikeyApi(
+            const loginResponse = await authClient.loginByApiKey(
               apikey,
               extensionId || extensionCommands.getExtensionId(),
             );
-            await processLoginResponse(loginResponse, true);
+            await applyAuthenticatedSession(loginResponse);
             return; // login + setup complete
           } catch (err) {
             console.warn("[AuthContext] Apikey auto-login failed:", err);
@@ -1261,7 +1211,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Restore existing session (user previously logged in)
       setUser(storedUser);
       // Restore the apikey-session flag so the logout button stays hidden.
-      const storedIsApikeySession = await appStorage.getItem<boolean>("local:isApikeySession");
       setIsApikeySession(storedIsApikeySession === true);
 
       if (hasExtensionConfigId(storedUser.extension_session?.extension_config_id)) {
@@ -1302,16 +1251,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   // Login with username + password (existing flow — unchanged).
-  const login = async (username: string, password: string): Promise<boolean | any> => {
+  const login = async (username: string, password: string): Promise<boolean> => {
     setError(null);
     try {
       if (username && password) {
-        const loginResponse = await api.extensionUser.loginApi(
+        const loginResponse = await authClient.login(
           username,
           password,
           extensionId || extensionCommands.getExtensionId(),
         );
-        return await processLoginResponse(loginResponse, false);
+        return await applyAuthenticatedSession(loginResponse);
       } else {
         setError("Username and password are required");
         return false;
@@ -1374,11 +1323,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const apikey = await getStoredApikey();
       if (apikey) {
         try {
-          const loginResponse = await api.extensionUser.loginWithApikeyApi(
+          const loginResponse = await authClient.loginByApiKey(
             apikey,
             extensionId || extensionCommands.getExtensionId(),
           );
-          await processLoginResponse(loginResponse);
+          await applyAuthenticatedSession(loginResponse);
           console.log(
             "[AuthContext] Session expired — re-logged in via apikey",
           );

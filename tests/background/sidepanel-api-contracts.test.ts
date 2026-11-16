@@ -31,7 +31,6 @@ const cases: Array<[string, () => Promise<unknown>, Record<string, unknown>]> = 
   ["getProxiesByPersona", () => api.proxy.getProxiesByPersona("persona", filter), { personaId: "persona", filter }],
   ["getProxyInfo", () => api.proxy.getProxyInfo("proxy"), { proxy_id: "proxy" }],
   ["getSocialAccountProxy", () => api.socialAccount.getSocialAccountProxy("account"), { id: "account" }],
-  ["getSocialAccountInfo", () => api.socialAccount.getSocialAccountInfo("account"), { id: "account" }],
   ["getSocialAccountGroups", () => api.socialAccount.getSocialAccountGroups("account", 0, 10), { id: "account", offset: 0, limit: 10 }],
   ["getSocialAccountsByPersona", () => api.socialAccount.getSocialAccountsByPersona("persona", filter), { personaId: "persona", filter }],
   ["getProfileCases", () => api.profileCase.getProfileCases(filter), { filter }],

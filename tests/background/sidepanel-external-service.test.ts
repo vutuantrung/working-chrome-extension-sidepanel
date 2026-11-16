@@ -24,10 +24,12 @@ describe("Sidepanel external service bridge", () => {
     await expect(client.request("getPersonas")).rejects.toThrow("no service response");
     await expect(client.request("getPersonas")).rejects.toThrow("request failed");
   });
-  it("preserves the legacy void upload response", async () => {
+  it("requires explicit image upload acknowledgment", async () => {
     const { client, sendMessage } = setup();
-    sendMessage.mockResolvedValue(undefined);
-    await expect(client.request("postCaseImages")).resolves.toBeUndefined();
+    sendMessage.mockResolvedValueOnce(true).mockResolvedValueOnce(undefined).mockResolvedValueOnce(false);
+    await expect(client.request("postCaseImages")).resolves.toBe(true);
+    await expect(client.request("postCaseImages")).rejects.toThrow("did not acknowledge");
+    await expect(client.request("postCaseImages")).rejects.toThrow("did not acknowledge");
   });
   it("propagates transport failure", async () => {
     const { client, sendMessage } = setup();

@@ -35,8 +35,10 @@ export class ExternalServiceClient {
       if (result && typeof result === "object" && "success" in result && result.success === false) {
         throw new Error("Background service request failed");
       }
-      // postCaseImages is the only legacy operation whose success has no body.
-      if (result == null && serviceName !== "postCaseImages") {
+      if (serviceName === "postCaseImages" && result !== true) {
+        throw new Error("Background did not acknowledge image upload");
+      }
+      if (result == null) {
         throw new Error("Background returned no service response");
       }
       return result;
