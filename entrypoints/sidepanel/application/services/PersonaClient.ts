@@ -35,6 +35,18 @@ export class PersonaClient {
   ensureDefault(): Promise<PersonaState> {
     return this.requireActive(this.request<PersonaState>("PERSONA_ENSURE_DEFAULT"));
   }
+  switch(personaId: string, expectedRevision?: number): Promise<PersonaState> {
+    return this.requireActive(this.request<PersonaState>("PERSONA_SWITCH", {
+      personaId, ...(expectedRevision !== undefined ? { expectedRevision } : {}),
+    }), personaId);
+  }
+  async completeSwitchResources(personaId: string, expectedRevision: number): Promise<PersonaState> {
+    const result = await this.requireActive(this.request<PersonaState>("PERSONA_COMPLETE_SWITCH_RESOURCES", {
+      personaId, expectedRevision,
+    }), personaId);
+    if (result.resourceSetupPending !== false) throw new Error("Resource setup not acknowledged");
+    return result;
+  }
   select(personaId: string, expectedRevision?: number): Promise<PersonaState> {
     return this.request("PERSONA_SELECT", { personaId, ...(expectedRevision !== undefined ? { expectedRevision } : {}) });
   }

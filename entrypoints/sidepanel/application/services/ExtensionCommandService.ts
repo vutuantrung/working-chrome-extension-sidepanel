@@ -46,14 +46,16 @@ export class ExtensionCommandService {
   async initializeAfterLogin(
     extensionSession: unknown,
     context: Record<string, unknown> = {},
+    requireAcknowledgment = false,
   ): Promise<void> {
-    await this.runtime.sendMessage({
+    const response = await this.runtime.sendMessage<any>({
       type: "INITIALIZE_AFTER_LOGIN",
       inputs: {
         extension_session: extensionSession,
         ...context,
       },
     });
+    if (requireAcknowledgment && response?.success !== true) throw new Error("Background initialization not acknowledged");
   }
 
   async startPeriodicCheck(): Promise<void> {
@@ -64,11 +66,12 @@ export class ExtensionCommandService {
     await this.runtime.sendMessage({ type: "CLEAR_DATA_AFTER_LOGOUT" });
   }
 
-  async setProxy(extensionProxy: unknown): Promise<void> {
-    await this.runtime.sendMessage({
+  async setProxy(extensionProxy: unknown, requireAcknowledgment = false): Promise<void> {
+    const response = await this.runtime.sendMessage<any>({
       type: "SET_PROXY",
       inputs: { extension_proxy: extensionProxy },
     });
+    if (requireAcknowledgment && response?.success !== true) throw new Error("Proxy setup not acknowledged");
   }
 
   async getFacebookAccountCache<T = any>(): Promise<T | null> {

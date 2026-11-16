@@ -232,6 +232,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const manualLoginInFlight = useRef(false);
   const sessionEndInFlight = useRef(false);
   const recoveryInFlight = useRef(false);
+  const personaSwitchInFlight = useRef(false);
   const authenticatedRef = useRef(false);
   const navigate = useNavigate();
 
@@ -311,7 +312,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       personaAccountProxy: useExtensionConfig ? undefined : personaAccountProxy,
     });
     await setActiveProxy(effective);
-    await extensionCommands.setProxy(effective);
+    await extensionCommands.setProxy(effective, personaSwitchInFlight.current);
   };
 
   const persistPersonaSocialAccounts = async (persona: unknown, updateState = true) => {
@@ -412,11 +413,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         platformAccounts[0];
 
       if (!autoAccount?.cookies) {
-        console.warn(
-          "[AuthContext] switchPersona: no system account cookies for",
-          platformId,
-        );
-        return;
+        throw new Error("No assigned account cookies for selected platform");
       }
 
       let personaAccountProxy: unknown;
@@ -450,7 +447,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
       } catch { }
 
-      await applyCookieList(autoAccount.cookies);
+      await clearPlatformBrowserCookies(platformId);
+      if (!(await applyCookieList(autoAccount.cookies))) throw new Error("Persona cookie application failed");
       return;
     }
 
@@ -628,62 +626,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const switchPersona = async (personaId: string): Promise<{ success: boolean; error?: string }> => {
+    if (personaSwitchInFlight.current || sessionEndInFlight.current || recoveryInFlight.current ||
+        autoAuthInFlight.current || manualLoginInFlight.current) {
+      return { success: false, error: "Another session operation is running" };
+    }
+    personaSwitchInFlight.current = true;
     try {
-      if (await readHasExtensionConfig()) {
-        return {
-          success: false,
-          error: "Switch persona is only available without extension config.",
-        };
-      }
-      const currentId = String(personaId).trim();
-      if (!currentId) {
-        return {
-          success: false,
-          error: "Invalid persona id."
-        };
-      }
-      const currentSelection = await personaClient.getState();
-      const previousId = currentSelection.selectedPersonaId ?? "";
+      const current = await personaClient.getState();
+      const id = personaId.trim();
+      const selection = await personaClient.switch(id, current.revision);
+      if (!selection.resourceSetupPending) return { success: true };
 
-
-      if (previousId && previousId !== currentId) {
-        await api.extensionUser.deactivatePersona(previousId);
-      }
-      const activationResult = await api.extensionUser.activatePersonaSession(currentId);
-      console.log('[activationResult]', activationResult);
-
-      const currentPersonaData = await api.persona.getPersonaById(currentId);
-      const persona = parsePersonaRecord(currentPersonaData);
-      if (!persona) {
-        return {
-          success: false,
-          error: "Persona not found."
-        };
-      }
-
-      const selection = await personaClient.select(currentId, currentSelection.revision);
-      if (selection.selectedPersonaId !== currentId) throw new Error("Persona selection not acknowledged");
-      await appStorage.removeItem("local:profile");
-      await appStorage.removeItem("local:profileId");
-
-      mirrorPersonaSelection(persona, currentId);
+      // Transitional resource application: R3/R4 own migration of these ports.
+      setFacebookAccounts([]);
+      setExtensionProxy(null);
+      const persona = await loadSelectedPersona(id);
+      mirrorPersonaSelection(persona, id);
       await applyPersonaSession(persona, { reapplyPlatformLogin: true });
-      try {
-        const user = await appStorage.getItem<User>("local:user");
-        await extensionCommands.initializeAfterLogin(user?.extension_session);
-      } catch (err) {
-        console.warn("[AuthContext] switchPersona: failed to notify background:", err);
-      }
-
-      return {
-        success: true
-      };
+      const storedUser = await appStorage.getItem<User>("local:user");
+      await extensionCommands.initializeAfterLogin(storedUser?.extension_session, {}, true);
+      await personaClient.completeSwitchResources(id, selection.revision);
+      return { success: true };
     } catch (err) {
-      console.error("[AuthContext] switchPersona:", err);
-      return {
-        success: false,
-        error: err instanceof Error ? err.message : String(err),
-      };
+      return { success: false, error: err instanceof Error ? err.message : "Persona switch failed" };
+    } finally {
+      personaSwitchInFlight.current = false;
     }
   };
 
@@ -695,6 +662,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const selection = await personaClient.getState();
       const personaId = selection.selectedPersonaId;
       if (!personaId || selection.status === "reconciliation_required") { clearPersonaMirror(); return; }
+      if (selection.resourceSetupPending) { setError("Persona resource setup is pending. Open Switch Persona to resume."); return; }
       const persona = await loadSelectedPersona(personaId);
       mirrorPersonaSelection(persona, personaId);
       const personaProxy = personaId
@@ -817,7 +785,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const handleAuthExpiredEvent = () => {
       // A 401 from an in-progress sign-in is not an existing-session expiry.
-      if (!authenticatedRef.current || autoAuthInFlight.current || manualLoginInFlight.current || sessionEndInFlight.current || recoveryInFlight.current) return;
+      if (!authenticatedRef.current || autoAuthInFlight.current || manualLoginInFlight.current || sessionEndInFlight.current || recoveryInFlight.current || personaSwitchInFlight.current) return;
       void handleSessionExpired();
     };
 
@@ -1077,7 +1045,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const checkAuthAndRestore = (initial = false): Promise<void> => {
     if (autoAuthInFlight.current) return autoAuthInFlight.current;
-    if (authenticatedRef.current || manualLoginInFlight.current || sessionEndInFlight.current || recoveryInFlight.current) {
+    if (authenticatedRef.current || manualLoginInFlight.current || sessionEndInFlight.current || recoveryInFlight.current || personaSwitchInFlight.current) {
       if (initial) setLoading(false);
       return Promise.resolve();
     }
@@ -1116,7 +1084,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Manual sign-in cannot overlap a Sidepanel auto-login/setup workflow.
   const login = async (username: string, password: string): Promise<boolean> => {
-    if (autoAuthInFlight.current || manualLoginInFlight.current || sessionEndInFlight.current || recoveryInFlight.current) {
+    if (autoAuthInFlight.current || manualLoginInFlight.current || sessionEndInFlight.current || recoveryInFlight.current || personaSwitchInFlight.current) {
       setError("Authentication in progress. Please try again.");
       return false;
     }
@@ -1155,7 +1123,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const endAuthenticationSession = async (mode: "logout" | "restart"): Promise<void> => {
-    if (sessionEndInFlight.current || recoveryInFlight.current) return;
+    if (sessionEndInFlight.current || recoveryInFlight.current || personaSwitchInFlight.current) return;
     if (autoAuthInFlight.current || manualLoginInFlight.current) {
       setError("Authentication in progress. Please try again.");
       return;

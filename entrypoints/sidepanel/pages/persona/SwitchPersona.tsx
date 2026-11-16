@@ -1,10 +1,9 @@
-import api from "../../infrastructure/api";
 import "../../assets/css/pages/PersonaPage.css";
 import React, { useEffect, useState } from "react";
-import { localStorageService } from "../../../../entrypoints/sidepanel/application/services/SidepanelServices";
+import { personaClient } from "../../application/services/SidepanelServices";
 import { useAuth } from "../../contexts/AuthContext";
-import { parseList } from "../../helpers/helpers";
-import { Persona, ViewState } from "../../types/types";
+import type { ViewState } from "../../types/types";
+import type { PersonaSummary } from "../../types/PersonaContracts";
 import ConfirmModal from "../../components/modal/ConfirmModal";
 import StatusScreen from "../../components/Persona/StatusScreen";
 import PersonaCard from "../../components/Persona/PersonaCard";
@@ -19,7 +18,7 @@ const SwitchPersona: React.FC<SwitchPersonaProps> = ({ onSwitched }) => {
   const { user, canSwitchPersona, switchPersona } = useAuth();
 
   const [viewState, setViewState] = useState<ViewState>("initializing");
-  const [personas, setPersonas] = useState<Persona[]>([]);
+  const [personas, setPersonas] = useState<PersonaSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
@@ -46,12 +45,15 @@ const SwitchPersona: React.FC<SwitchPersonaProps> = ({ onSwitched }) => {
       setViewState("initializing");
       setErrorMsg(null);
 
-      const currentPersonaId = localStorageService.getItem("selectedPersonaId");
-
       try {
-        const data = await api.persona.getPersonas(user?.id ?? "");
-        const list: Persona[] = parseList(data?.data ?? data);
-        const switchable = list.filter((p) => p.id !== currentPersonaId);
+        const prepared = await personaClient.prepareSelection();
+        if (prepared.state.status === "reconciliation_required") {
+          setErrorMsg("Previous persona switch requires reconciliation. Restart or sign in again before switching.");
+          setViewState("ready");
+          return;
+        }
+        const switchable = prepared.candidates.filter(p => prepared.state.resourceSetupPending
+          ? p.id === prepared.state.selectedPersonaId : p.id !== prepared.state.selectedPersonaId);
 
         if (switchable.length === 0) {
           setViewState("no-options");
