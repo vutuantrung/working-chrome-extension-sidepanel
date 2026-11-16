@@ -35,3 +35,25 @@ describe("AuthClient", () => {
     await expect(client.getState()).rejects.toThrow("Invalid authentication response");
   });
 });
+
+describe("R1.2 auto-login client contract", () => {
+  it.each([
+    { status: "anonymous" },
+    { status: "restored", user: { id: "user" }, isApikeySession: false },
+    { status: "authenticated", session: { user: { id: "user" }, isApikeySession: true, extensionConfig: null, configurationUnavailable: false } },
+  ])("forwards %j without sending stored credentials", async data => {
+    const { client, sendMessage } = setup();
+    sendMessage.mockResolvedValue({ success: true, data });
+    expect(await client.autoLogin("ext")).toEqual(data);
+    expect(sendMessage).toHaveBeenCalledExactlyOnceWith({
+      type: "AUTH_AUTO_LOGIN", inputs: { extensionId: "ext" },
+    });
+  });
+
+  it("rejects automatic authentication failure", async () => {
+    const { client, sendMessage } = setup();
+    sendMessage.mockResolvedValue({ success: false, error: "Authentication failed", code: "AUTH_FAILED" });
+    await expect(client.autoLogin("ext")).rejects.toThrow("Authentication failed");
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+});

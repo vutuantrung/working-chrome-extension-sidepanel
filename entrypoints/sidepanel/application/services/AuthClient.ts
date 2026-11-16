@@ -9,6 +9,11 @@ export type AuthLoginResult = {
   configurationUnavailable: boolean;
 };
 
+export type AutoLoginResult =
+  | { status: "anonymous" }
+  | { status: "restored"; user: User; isApikeySession: boolean }
+  | { status: "authenticated"; session: AuthLoginResult };
+
 type AuthResponse<T> = { success: true; data: T } | { success: false; error?: string; code?: string };
 
 export class AuthClient {
@@ -41,6 +46,10 @@ export class AuthClient {
 
   loginByApiKey(apiKey: string, extensionId: string): Promise<AuthLoginResult> {
     return this.request("AUTH_LOGIN_BY_API_KEY", { apiKey, extensionId });
+  }
+
+  autoLogin(extensionId: string): Promise<AutoLoginResult> {
+    return this.request("AUTH_AUTO_LOGIN", { extensionId });
   }
 
   getState(): Promise<AuthState> {

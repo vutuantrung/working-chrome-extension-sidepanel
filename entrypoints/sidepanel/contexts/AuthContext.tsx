@@ -3,6 +3,7 @@ import {
   useContext,
   useState,
   useEffect,
+  useRef,
   ReactNode,
 } from "react";
 import { useNavigate } from "react-router-dom";
@@ -250,6 +251,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // True when the current session was established via apikey (not username/password).
   // Used to hide the logout button for apikey-managed sessions.
   const [isApikeySession, setIsApikeySession] = useState(false);
+  // Keep the complete local restore/setup workflow single-flight across
+  // mount, storage notifications and polling (including StrictMode effects).
+  const autoAuthInFlight = useRef<Promise<void> | null>(null);
+  const manualLoginInFlight = useRef(false);
+  const authenticatedRef = useRef(false);
   const navigate = useNavigate();
 
   const { t } = useTranslation();
@@ -886,7 +892,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const handleAuthExpiredEvent = () => {
-      handleSessionExpired();
+      // A 401 from an in-progress sign-in is not an existing-session expiry.
+      if (!authenticatedRef.current || autoAuthInFlight.current || manualLoginInFlight.current) return;
+      void handleSessionExpired();
     };
 
     // Listen for same-page dispatched event (from popup's own API calls)
@@ -894,7 +902,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Listen for cross-context messages (from background/content scripts)
     const messageListener = (message: any) => {
       if (message.type === "AUTH_EXPIRED") {
-        handleSessionExpired();
+        handleAuthExpiredEvent();
       }
     };
     const unsubscribeRuntime = extensionCommands.subscribe(messageListener);
@@ -984,7 +992,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setExtensionId(extensionCommands.getExtensionId());
-    checkAuthAndRestore();
+    void checkAuthAndRestore(true);
   }, []);
 
   useEffect(() => {
@@ -1023,98 +1031,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [user]);
 
-  // Listen for the apikey being injected into chrome.storage.local while the
-  // popup is already open and the user is not yet logged in.
-  // This handles the case where the desktop app injects the apikey AFTER the
-  // popup has rendered the login screen (e.g. first install: popup opens before
-  // the injector runs).
+  // The UI only signals a possible authentication-state change. Background
+  // reads the injected API key and decides whether sign-in is necessary.
   useEffect(() => {
-    if (user) return; // Already authenticated — listener not needed
-
-    const handleApikeyInjected = (
-      changes: StorageChangeMap,
-      areaName: string,
-    ) => {
-      if (areaName !== "local") return;
-      const newApikey = changes?.apikey?.newValue as string | undefined;
-      if (!newApikey) return; // apikey removed or irrelevant change
-
-      console.log(
-        "[AuthContext] apikey injected into storage — attempting auto-login",
-      );
-      (async () => {
-        try {
-          const curExtensionId = extensionId || extensionCommands.getExtensionId()
-          const loginResponse = await authClient.loginByApiKey(newApikey, curExtensionId);
-          await applyAuthenticatedSession(loginResponse);
-        } catch (err) {
-          console.warn(
-            "[AuthContext] apikey storage-change auto-login failed:",
-            err,
-          );
-        }
-      })();
-    };
-
-    return extensionStorage.subscribe(handleApikeyInjected);
-  }, [user, extensionId]);
-
-  // Polling fallback: every N seconds while not logged in, check for apikey in
-  // chrome.storage.local and attempt auto-login if found.
-  // — Complements the onChanged listener for cases where the apikey was already
-  //   present when the listener was registered but login failed silently.
-  // — Automatically stops when user logs in via any method (apikey or
-  //   username/password) because `user` becoming non-null triggers cleanup.
-  useEffect(() => {
-    if (user) return; // Already authenticated — no polling needed
-
-    // Track inflight to avoid concurrent login attempts from overlapping ticks.
-    let loginInFlight = false;
-    let isCancelled = false;
-
-    const pollForApikey = async () => {
-      if (isCancelled || loginInFlight) return;
-      try {
-        const result = await extensionStorage.get("apikey");
-        const apikey = result?.apikey as string | undefined;
-        if (!apikey || isCancelled) return;
-
-        loginInFlight = true;
-        console.log("[AuthContext] Polling found apikey — attempting auto-login");
-        try {
-          const loginResponse = await authClient.loginByApiKey(
-            apikey,
-            extensionId || extensionCommands.getExtensionId(),
-          );
-          if (!isCancelled) {
-            await applyAuthenticatedSession(loginResponse);
-            // applyAuthenticatedSession calls setUser → triggers re-render →
-            // useEffect cleanup fires → interval cleared automatically.
-          }
-        } catch (err) {
-          console.warn(
-            "[AuthContext] Poll apikey login failed — will retry:",
-            err,
-          );
-          loginInFlight = false;
-        }
-      } catch {
-        // chrome.storage unavailable — skip this tick
+    if (user) return;
+    const requestAutoLogin = () => { void checkAuthAndRestore(); };
+    const unsubscribe = extensionStorage.subscribe((changes, area) => {
+      if (area === "local" && Object.prototype.hasOwnProperty.call(changes, "apikey")) {
+        requestAutoLogin();
       }
-    };
-
-    const intervalId = setInterval(pollForApikey, 5000); // every 5 seconds
-
+    });
+    const intervalId = setInterval(requestAutoLogin, 5000);
     return () => {
-      isCancelled = true;
+      unsubscribe();
       clearInterval(intervalId);
     };
-  }, [user, extensionId]);
+  }, [user]);
 
   // Background authenticates, normalizes and persists the session.
   // Persona, platform and proxy orchestration remain here until their migration.
   const applyAuthenticatedSession = async (result: AuthLoginResult): Promise<boolean> => {
     const { user: newUser, isApikeySession: apiKeySession, extensionConfig: extensionConfigInfo, configurationUnavailable } = result;
+    authenticatedRef.current = true;
     setUser(newUser);
     setIsApikeySession(apiKeySession);
     const useExtensionConfig = hasExtensionConfigId(newUser.extension_session?.extension_config_id);
@@ -1172,7 +1110,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return true;
   };
 
-  // Helper to read apikey from chrome.storage.local (injected by desktop app).
+  // Legacy expiry-only credential retrieval; migrate with R1.4.
   const getStoredApikey = async (): Promise<string | null> => {
     try {
       const result = await extensionStorage.get("apikey");
@@ -1182,76 +1120,91 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const checkAuthAndRestore = async () => {
-    try {
-      const { user: storedUser, isApikeySession: storedIsApikeySession } = await authClient.getState();
-      if (!storedUser) {
-        // No stored session — try apikey auto-login before showing login screen.
-        // The apikey is injected into chrome.storage.local by the desktop app.
-        const apikey = await getStoredApikey();
-        if (apikey) {
-          try {
-            const loginResponse = await authClient.loginByApiKey(
-              apikey,
-              extensionId || extensionCommands.getExtensionId(),
-            );
-            await applyAuthenticatedSession(loginResponse);
-            return; // login + setup complete
-          } catch (err) {
-            console.warn("[AuthContext] Apikey auto-login failed:", err);
-            // Fall through — show the normal login screen
-          }
-        }
-        // No apikey or apikey login failed — show login screen
-        setFacebookAccounts([]);
-        setExtensionProxy(null);
-        return;
-      }
+  const restoreExistingSession = async (storedUser: User, storedIsApikeySession: boolean) => {
+    // Restore existing session (user previously logged in)
+    authenticatedRef.current = true;
+    setUser(storedUser);
+    // Restore the apikey-session flag so the logout button stays hidden.
+    setIsApikeySession(storedIsApikeySession === true);
 
-      // Restore existing session (user previously logged in)
-      setUser(storedUser);
-      // Restore the apikey-session flag so the logout button stays hidden.
-      setIsApikeySession(storedIsApikeySession === true);
-
-      if (hasExtensionConfigId(storedUser.extension_session?.extension_config_id)) {
-        await ensureDefaultPersonaForExtensionConfig(storedUser.id);
-        // Sync React state in AppRoutes after persona ID may have been set
-        window.dispatchEvent(new Event("localStorageSync"));
-      }
-
-      const storedFacebookAccounts = await appStorage.getItem<SocialAccount[]>("local:facebookAccounts");
-      if (storedFacebookAccounts) setFacebookAccounts(storedFacebookAccounts);
-
-      await syncPersonaContextFromLocalStorage(true);
-
-      const storedActiveProxy = await appStorage.getItem<any>("local:activeProxy");
-      if (storedActiveProxy) {
-        setExtensionProxy(storedActiveProxy);
-      } else {
-        const storedProxy = await appStorage.getItem<any>("local:extensionProxy");
-        if (storedProxy) setExtensionProxy(storedProxy);
-      }
-
-      const accountProxyOpts = await resolveAccountProxy();
-      await applyEffectiveProxy(accountProxyOpts);
-
-      if (storedUser.extension_session) {
-        try {
-          await extensionCommands.initializeAfterLogin(storedUser.extension_session);
-        } catch (err) {
-          console.error("[AuthContext] Failed to sync settings:", err);
-        }
-      }
-    } catch (error) {
-      setError("Failed to check authentication.");
-      console.error("Auth check failed:", error);
-    } finally {
-      setLoading(false);
+    if (hasExtensionConfigId(storedUser.extension_session?.extension_config_id)) {
+      await ensureDefaultPersonaForExtensionConfig(storedUser.id);
+      // Sync React state in AppRoutes after persona ID may have been set
+      window.dispatchEvent(new Event("localStorageSync"));
     }
+
+    const storedFacebookAccounts = await appStorage.getItem<SocialAccount[]>("local:facebookAccounts");
+    if (storedFacebookAccounts) setFacebookAccounts(storedFacebookAccounts);
+
+    await syncPersonaContextFromLocalStorage(true);
+
+    const storedActiveProxy = await appStorage.getItem<any>("local:activeProxy");
+    if (storedActiveProxy) {
+      setExtensionProxy(storedActiveProxy);
+    } else {
+      const storedProxy = await appStorage.getItem<any>("local:extensionProxy");
+      if (storedProxy) setExtensionProxy(storedProxy);
+    }
+
+    const accountProxyOpts = await resolveAccountProxy();
+    await applyEffectiveProxy(accountProxyOpts);
+
+    if (storedUser.extension_session) {
+      try {
+        await extensionCommands.initializeAfterLogin(storedUser.extension_session);
+      } catch (err) {
+        console.error("[AuthContext] Failed to sync settings:", err);
+      }
+    }
+
   };
 
-  // Login with username + password (existing flow — unchanged).
+  const checkAuthAndRestore = (initial = false): Promise<void> => {
+    if (autoAuthInFlight.current) return autoAuthInFlight.current;
+    if (authenticatedRef.current || manualLoginInFlight.current) {
+      if (initial) setLoading(false);
+      return Promise.resolve();
+    }
+
+    const run = async () => {
+      try {
+        const result = await authClient.autoLogin(extensionCommands.getExtensionId());
+        switch (result.status) {
+          case "authenticated":
+            await applyAuthenticatedSession(result.session);
+            break;
+          case "restored":
+            await restoreExistingSession(result.user, result.isApikeySession);
+            break;
+          case "anonymous":
+            setFacebookAccounts([]);
+            setExtensionProxy(null);
+            break;
+          default:
+            throw new Error("Invalid automatic authentication response");
+        }
+      } catch {
+        // Keep the login form available. A later storage event or poll can
+        // request reconciliation; never send credentials from this flow.
+        if (initial) console.warn("[AuthContext] Initial authentication check failed");
+      } finally {
+        if (initial) setLoading(false);
+      }
+    };
+    const pending = run().finally(() => {
+      if (autoAuthInFlight.current === pending) autoAuthInFlight.current = null;
+    });
+    autoAuthInFlight.current = pending;
+    return pending;
+  };
+
+  // Manual sign-in cannot overlap a Sidepanel auto-login/setup workflow.
   const login = async (username: string, password: string): Promise<boolean> => {
+    if (autoAuthInFlight.current || manualLoginInFlight.current) {
+      setError("Authentication in progress. Please try again.");
+      return false;
+    }
+    manualLoginInFlight.current = true;
     setError(null);
     try {
       if (username && password) {
@@ -1268,6 +1221,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (e: any) {
       setError(e?.message || "Login failed");
       return false;
+    } finally {
+      manualLoginInFlight.current = false;
     }
   };
 
@@ -1307,6 +1262,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await appStorage.removeItem("local:profileId");
       await appStorage.removeItem("local:activeProxy");
       await appStorage.removeItem("local:isApikeySession");
+      authenticatedRef.current = false;
       setUser(null);
       setIsApikeySession(false);
       setFacebookAccounts([]);
@@ -1395,6 +1351,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await appStorage.removeItem("local:profile");
       await appStorage.removeItem("local:profileId");
       await appStorage.removeItem("local:activeProxy");
+      authenticatedRef.current = false;
       setUser(null);
       setIsApikeySession(false);
       setFacebookAccounts([]);
@@ -1444,6 +1401,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await appStorage.removeItem("local:profileId");
       await appStorage.removeItem("local:activeProxy");
 
+      authenticatedRef.current = false;
       setUser(null);
       setIsApikeySession(false);
       setFacebookAccounts([]);
