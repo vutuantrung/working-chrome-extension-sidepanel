@@ -2,8 +2,6 @@ import { externalServiceClient } from "../../application/services/SidepanelServi
 
 export const getSocialAccountProxy = (id: string) =>
   externalServiceClient.request("getSocialAccountProxy", { id });
-export const getSocialAccountInfo = (id: string) =>
-  externalServiceClient.request("getSocialAccountInfo", { id });
 export const getSocialAccountGroups = (id: string, offset?: number, limit?: number) =>
   externalServiceClient.request("getSocialAccountGroups", { id, offset, limit });
 export const getSocialAccountsByPersona = (personaId: string, filter?: any) =>

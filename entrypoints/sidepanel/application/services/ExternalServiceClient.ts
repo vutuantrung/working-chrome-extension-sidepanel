@@ -5,7 +5,7 @@ export type ExternalServiceName =
   | "getExtensionConfigInfo" | "deactivatePersona" | "activatePersonaSession"
   | "getPersonas" | "getPersonaById" | "createPersona"
   | "getProxiesByPersona" | "getProxyInfo"
-  | "getSocialAccountProxy" | "getSocialAccountInfo" | "getSocialAccountGroups"
+  | "getSocialAccountProxy" | "getSocialAccountGroups"
   | "getSocialAccountsByPersona" | "getProfileCases" | "createProfileCase"
   | "patchCaseInfo" | "postCaseImages" | "getMemberSourcesGroup" | "getMemberSourcesApi";
 

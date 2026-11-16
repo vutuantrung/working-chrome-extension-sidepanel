@@ -81,7 +81,7 @@ Legacy envelope: { type: "CALL_EXTERNAL_SERVICE", inputs: { serviceName, body } 
 | Extension user | login, loginByApiKey, logout, updateExtensionSession, getExtensionConfigInfo, deactivatePersona, activatePersonaSession |
 | Persona | getPersonas, createPersona, getPersonaById |
 | Proxy | getProxiesByPersona, getProxyInfo |
-| Social account | getSocialAccountProxy, getSocialAccountInfo, getSocialAccountGroups, getSocialAccountsByPersona |
+| Social account | getSocialAccountProxy, getSocialAccountGroups, getSocialAccountsByPersona |
 | Evidence | getProfileCases, createProfileCase, patchCaseInfo, postCaseImages |
 | Groups | getMemberSourcesGroup, getMemberSourcesApi |
 
