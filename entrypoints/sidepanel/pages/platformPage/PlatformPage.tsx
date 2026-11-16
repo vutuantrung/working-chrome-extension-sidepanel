@@ -55,7 +55,7 @@ const SwitchPlatform: React.FC = () => {
     } catch { }
 
     setBusyMode(mode);
-    const result = await loginWithMode(mode, selectedPlatform.id);
+    const result = await loginWithMode(mode, selectedPlatform.id).catch(() => ({ success: false as const, reason: "unknown" as const }));
     setBusyMode(null);
 
     if (result.success === true) {

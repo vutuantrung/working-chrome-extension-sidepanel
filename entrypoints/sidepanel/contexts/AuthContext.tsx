@@ -11,6 +11,7 @@ import {
   appStorage,
   authClient,
   personaClient,
+  socialAccountResourceReader,
   browserCookies,
   browserTabs,
   extensionCommands,
@@ -37,10 +38,7 @@ import type {
   User
 } from "../types/types";
 import {
-  extractPersonaSocialAccounts, 
-  normalizePersonaSocialAccount,
   extractPersonaProxy,
-  findPersonaFacebookAccountProxy,
   findPersonaSocialAccountProxy,
   hasExtensionConfigId,
   resolveEffectiveProxy,
@@ -112,26 +110,6 @@ const clearCookiesForDomain = async (domain: string): Promise<void> => {
 const clearPlatformBrowserCookies = async (platformId: string): Promise<void> => {
   const domains = getPlatformCookieDomains(platformId);
   await Promise.all(domains.map((d) => clearCookiesForDomain(d)));
-};
-
-const hydrateAccountsWithProxy = async (accounts: SocialAccount[]): Promise<SocialAccount[]> => {
-  return Promise.all(
-    accounts.map(async (account) => {
-      const isProxyValid = !account.proxy || Object.keys(account.proxy || {}).length === 0
-      if (account.proxy_id && isProxyValid) {
-        try {
-          const proxyData = await api.proxy.getProxyInfo(account.proxy_id);
-          return { ...account, proxy: proxyData };
-        } catch (err) {
-          console.warn(
-            `[hydrateAccountsWithProxy] Failed to fetch proxy for account ${account.account_id}:`,
-            err,
-          );
-        }
-      }
-      return account;
-    }),
-  );
 };
 
 const getLoginModeKey = (platformId: string) => platformId === "facebook" ? "fbLoginMode" : `${platformId}LoginMode`;
@@ -206,15 +184,6 @@ const applyStoredManualSocialCookies = async (stored: unknown): Promise<boolean>
 
 export const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// const getPlatformAccounts = async (
-//   platform: string,
-//   allAccounts: SocialAccount[],
-// ): Promise<SocialAccount[]> => {
-//   if (platform === "facebook") return allAccounts;
-//   const stored = await appStorage.getItem<SocialAccount[]>("local:allSocialAccounts");
-//   if (!stored?.length) return [];
-//   return stored.filter((a) => a.platform === platform && a.status === "active");
-// };
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -276,10 +245,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     if (useExtensionConfig && extensionAccountProxy === undefined) {
       if (fbLoginMode?.mode === "auto") {
-        const accounts =
-          (await appStorage.getItem<SocialAccount[]>("local:allSocialAccounts")) ||
-          (await appStorage.getItem<SocialAccount[]>("local:facebookAccounts")) ||
-          [];
+        const accounts = await readSessionAccounts(false, false).catch(() => []);
         extensionAccountProxy = findExtensionAccountProxyByPlatform(
           accounts,
           activePlatform,
@@ -290,11 +256,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     if (!useExtensionConfig && personaAccountProxy === undefined) {
       if (fbLoginMode?.mode === "auto") {
-        const accounts =
-          (await appStorage.getItem<SocialAccount[]>("local:allSocialAccounts")) ||
-          (await appStorage.getItem<SocialAccount[]>("local:personaSocialAccounts")) ||
-          (await appStorage.getItem<SocialAccount[]>("local:personaFacebookAccounts")) ||
-          [];
+        const accounts = accountsForPlatform(await readSessionAccounts(false, false).catch(() => []), activePlatform);
         personaAccountProxy = findPersonaSocialAccountProxy(
           accounts,
           fbLoginMode.account_id,
@@ -315,96 +277,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await extensionCommands.setProxy(effective, personaSwitchInFlight.current);
   };
 
-  const persistPersonaSocialAccounts = async (persona: unknown, updateState = true) => {
-    const allAccounts = extractPersonaSocialAccounts(persona) as SocialAccount[];
-    const facebookOnly = allAccounts.filter((a) => a.platform === "facebook");
-
-    await appStorage.setItem("local:personaSocialAccounts", allAccounts);
-    await appStorage.setItem("local:personaFacebookAccounts", facebookOnly);
-
-    const useExtensionConfig = await readHasExtensionConfig();
-    if (!useExtensionConfig && allAccounts.length > 0) {
-      const existingAll = await appStorage.getItem<SocialAccount[]>("local:allSocialAccounts");
-      const existingHasProxy =
-        existingAll?.some((a) => a.proxy && Object.keys(a.proxy).length > 0) ??
-        false;
-      const newHasProxy = allAccounts.some(
-        (a) => a.proxy && Object.keys((a.proxy as any) || {}).length > 0,
-      );
-
-      if (!existingAll?.length || newHasProxy || !existingHasProxy) {
-        await appStorage.setItem("local:allSocialAccounts", allAccounts);
-        await appStorage.setItem("local:facebookAccounts", facebookOnly);
-        if (updateState) setFacebookAccounts(facebookOnly);
-      } else {
-        if (updateState && facebookOnly.length > 0) {
-        }
-      }
+  // R3.2: Background owns both source resolution and catalog persistence.
+  const readSessionAccounts = async (refresh = false, updateState = true): Promise<SocialAccount[]> => {
+    try {
+      const accounts = await socialAccountResourceReader.read(refresh);
+      if (updateState) setFacebookAccounts(accountsForPlatform(accounts, "facebook"));
+      return accounts;
+    } catch (error) {
+      if (updateState) setFacebookAccounts([]);
+      throw error;
     }
-    return allAccounts;
   };
 
   const reapplyPlatformLoginAfterPersonaSwitch = async (accounts: SocialAccount[]) => {
     if (localStorageService.getItem("fbLoginModeSelected") !== "1") return;
     const platformId = (getSelectedPlatformId() as PlatformId | null) ?? "facebook";
     const loginMode = await readPlatformLoginMode(platformId);
-    const storedAll = await appStorage.getItem<SocialAccount[]>("local:allSocialAccounts");
-    const storedHydrated = storedAll?.filter((a) => {
-      const p = String(a.platform ?? "").toLowerCase();
-      const normalized = p === "twitter" ? "x" : p;
-      return (
-        normalized === platformId &&
-        String(a.status ?? "active").toLowerCase() === "active"
-      );
-    }) ?? [];
-
-    let platformAccounts = storedHydrated.length > 0
-      ? storedHydrated
-      : accountsForPlatform(accounts, platformId);
-
-    const hasProxy = platformAccounts.some((a) => a.proxy && Object.keys(a.proxy || {}).length > 0);
-    if (!hasProxy) {
-      try {
-        const personaId = localStorageService.getItem("selectedPersonaId");
-        if (personaId) {
-          const response = await api.socialAccount.getSocialAccountsByPersona(personaId);
-          const rawAccounts: SocialAccount[] = Array.isArray(response?.data)
-            ? response.data
-            : Array.isArray(response)
-              ? response
-              : [];
-
-          if (rawAccounts.length) {
-            const normalized = rawAccounts.map((a: any) => ({
-              ...a,
-              platform: a.platform === "twitter" ? "x" : a.platform,
-            }));
-            const active = normalized.filter((a: any) => a.status === "active");
-            const hydrated = await hydrateAccountsWithProxy(active);
-            const sanitized = hydrated
-              .map((a: unknown) => normalizePersonaSocialAccount(a))
-              .filter(
-                (a): a is NonNullable<typeof a> => a !== null,
-              ) as SocialAccount[];
-
-            await appStorage.setItem("local:allSocialAccounts", sanitized);
-            await appStorage.setItem("local:personaSocialAccounts", sanitized);
-            const fbOnly = sanitized.filter((a: any) => a.platform === "facebook");
-            if (fbOnly.length) {
-              await appStorage.setItem("local:facebookAccounts", fbOnly);
-              await appStorage.setItem("local:personaFacebookAccounts", fbOnly);
-            }
-
-            platformAccounts = accountsForPlatform(sanitized, platformId);
-          }
-        }
-      } catch (err) {
-        console.warn(
-          "[reapplyPlatformLoginAfterPersonaSwitch] Failed to refresh accounts:",
-          err,
-        );
-      }
-    }
+    const platformAccounts = accountsForPlatform(accounts, platformId);
 
     if (loginMode.mode === "auto") {
       const useExtensionConfig = await readHasExtensionConfig();
@@ -418,9 +307,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       let personaAccountProxy: unknown;
       if (useExtensionConfig) {
-        const allSocialAccounts =
-          (await appStorage.getItem<SocialAccount[]>("local:allSocialAccounts")) ??
-          [];
+        const allSocialAccounts = accounts;
         personaAccountProxy = findExtensionAccountProxyByPlatform(
           allSocialAccounts,
           platformId,
@@ -572,7 +459,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       : extractPersonaProxy(persona);
 
     await appStorage.setItem("local:personaProxy", personaProxy);
-    const accounts = await persistPersonaSocialAccounts(persona, true);
+    const accounts = await readSessionAccounts(true);
 
     const platformId = (getSelectedPlatformId() as PlatformId | null) ?? "facebook";
     const loginMode = await readPlatformLoginMode(platformId);
@@ -657,11 +544,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const hasExtensionConfig = hasExtensionConfigId(user?.extension_session?.extension_config_id);
   const canSwitchPersona = !hasExtensionConfig;
 
-  const syncPersonaContextFromLocalStorage = async (updateState = false) => {
+  const restoreSelectedPersonaResources = async (updateState = false) => {
     try {
       const selection = await personaClient.getState();
       const personaId = selection.selectedPersonaId;
-      if (!personaId || selection.status === "reconciliation_required") { clearPersonaMirror(); return; }
+      if (!personaId || selection.status !== "active") { clearPersonaMirror(); if (updateState && !(await readHasExtensionConfig())) setFacebookAccounts([]); return; }
       if (selection.resourceSetupPending) { setError("Persona resource setup is pending. Open Switch Persona to resume."); return; }
       const persona = await loadSelectedPersona(personaId);
       mirrorPersonaSelection(persona, personaId);
@@ -670,46 +557,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         : extractPersonaProxy(persona);
 
       await appStorage.setItem("local:personaProxy", personaProxy);
-      await persistPersonaSocialAccounts(persona, updateState);
+      if (!(await readHasExtensionConfig())) await readSessionAccounts(false, updateState);
     } catch {
-      // ignore invalid persona snapshot
+      if (updateState) setFacebookAccounts([]);
     }
-  };
-
-  const getPersonaFacebookAccounts = async (): Promise<SocialAccount[]> => {
-    if (await readHasExtensionConfig()) return [];
-
-    const stored = await appStorage.getItem<SocialAccount[]>("local:personaFacebookAccounts");
-    if (stored?.length) return stored;
-    await syncPersonaContextFromLocalStorage(false);
-
-    const personaFacebookAccounts = await appStorage.getItem<SocialAccount[]>("local:personaFacebookAccounts");
-    return personaFacebookAccounts || [];
-  };
-
-  const getFacebookAccountsForSession = async (): Promise<SocialAccount[]> => {
-    if (await readHasExtensionConfig()) {
-      if (facebookAccounts?.length) return facebookAccounts;
-
-      const currentFacebookAccounts = await appStorage.getItem<SocialAccount[]>("local:facebookAccounts");
-      return currentFacebookAccounts || [];
-    }
-
-    const allSocial = await appStorage.getItem<SocialAccount[]>("local:allSocialAccounts");
-    const facebookFromAll =
-      allSocial?.filter(
-        (a) =>
-          String(a.platform ?? "").toLowerCase() === "facebook" &&
-          String(a.status ?? "active").toLowerCase() === "active",
-      ) ?? [];
-    if (facebookFromAll.length > 0) return facebookFromAll;
-
-    // Fallback
-    const personaAccounts = await getPersonaFacebookAccounts();
-    if (personaAccounts.length) return personaAccounts;
-
-    const currentFacebookAccounts = await appStorage.getItem<SocialAccount[]>("local:facebookAccounts");
-    return currentFacebookAccounts || [];
   };
 
   const resolveAccountProxy = async (): Promise<{
@@ -725,7 +576,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (fbLoginMode?.mode !== "auto") return {};
 
     const useExtensionConfig = await readHasExtensionConfig();
-    const accounts = await getFacebookAccountsForSession();
+    const accounts = await readSessionAccounts(false, false).catch(() => []);
 
     if (!accounts.length) return {};
 
@@ -735,10 +586,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       "facebook";
 
     if (useExtensionConfig) {
-      const accountAppStorage = await appStorage.getItem<SocialAccount[]>("local:allSocialAccounts");
       return {
         extensionAccountProxy: findExtensionAccountProxyByPlatform(
-          accountAppStorage ?? accounts,
+          accounts,
           activePlatform,
           fbLoginMode.account_id,
         ),
@@ -746,15 +596,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     return {
-      personaAccountProxy: findPersonaFacebookAccountProxy(
-        accounts,
+      personaAccountProxy: findPersonaSocialAccountProxy(
+        accountsForPlatform(accounts, activePlatform),
         fbLoginMode.account_id,
       ),
     };
   };
 
   const applyConfigProxyAndManualCookieSnapshot = async () => {
-    await syncPersonaContextFromLocalStorage(false);
+    await restoreSelectedPersonaResources(false);
 
     const accountProxyOpts = await resolveAccountProxy();
     await applyEffectiveProxy(accountProxyOpts);
@@ -819,26 +669,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const platformUrl = PLATFORM_URLS[selectedPlatform] ?? PLATFORM_URLS.facebook;
     const useExtensionConfig = await readHasExtensionConfig();
 
-    let restoredAccounts: SocialAccount[];
-    if (selectedPlatform === "facebook") {
-      restoredAccounts = await getFacebookAccountsForSession();
-    } else {
-      const allStored =
-        (await appStorage.getItem<SocialAccount[]>("local:allSocialAccounts")) ??
-        (await appStorage.getItem<SocialAccount[]>("local:personaSocialAccounts")) ??
-        [];
-      restoredAccounts = accountsForPlatform(allStored, selectedPlatform);
-
-      if (!allStored.length) {
-        console.warn(
-          "[loginWithMode] local:allSocialAccounts is empty — " +
-          "was login() called this session? Platform:",
-          selectedPlatform,
-        );
-      }
-    }
-
     if (mode === "auto") {
+      let restoredAccounts: SocialAccount[];
+      try {
+        restoredAccounts = accountsForPlatform(await readSessionAccounts(true), selectedPlatform);
+      } catch {
+        return { success: false, reason: "unknown" };
+      }
       if (!restoredAccounts.length) {
         return { success: false, reason: "no_accounts" };
       }
@@ -846,9 +683,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const autoAccount = restoredAccounts.find((a) => a.account_id === fbLoginModeData.account_id) ?? restoredAccounts[0];
 
       if (useExtensionConfig) {
-        const allSocialAccounts = (await appStorage.getItem<SocialAccount[]>("local:allSocialAccounts")) ?? [];
         const accountProxy = findExtensionAccountProxyByPlatform(
-          allSocialAccounts.length > 0 ? allSocialAccounts : restoredAccounts,
+          restoredAccounts,
           selectedPlatform,
           autoAccount.account_id,
         );
@@ -956,26 +792,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (configurationUnavailable) throw new Error("Extension configuration unavailable");
         await appStorage.setItem("local:extensionProxy", extensionConfigInfo?.proxy || {});
 
-        const rawSocialAccounts: unknown[] = extensionConfigInfo?.social_accounts || [];
-        const socialAccounts: SocialAccount[] = rawSocialAccounts
-          .map((a) => normalizePersonaSocialAccount(a))
-          .filter((a): a is NonNullable<typeof a> => a !== null) as SocialAccount[];
-        await appStorage.setItem("local:allSocialAccounts", socialAccounts);
-
-        const facebookAccts = socialAccounts.filter(
-          (a) => a.platform === "facebook" && a.status === "active",
-        );
-        setFacebookAccounts(facebookAccts);
-        await appStorage.setItem("local:facebookAccounts", facebookAccts);
+        const allSocialAccounts = await readSessionAccounts(true);
 
         await ensureDefaultPersonaForExtensionConfig();
         // Notify AppRoutes so it picks up the newly-set selectedPersonaId
         // (ensureDefaultPersonaForExtensionConfig persists the selected persona in
         // the same tab, which doesn't fire the 'storage' event).
         window.dispatchEvent(new Event("localStorageSync"));
-        const allSocialAccounts =
-          (await appStorage.getItem<SocialAccount[]>("local:allSocialAccounts")) ??
-          [];
         await extensionCommands.initializeAfterLogin(
           newUser.extension_session,
           {
@@ -985,12 +808,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           },
         );
       } else {
-        await syncPersonaContextFromLocalStorage(true);
-        const personaAccounts = await getPersonaFacebookAccounts();
-        if (personaAccounts.length > 0) {
-          setFacebookAccounts(personaAccounts);
-          await appStorage.setItem("local:facebookAccounts", personaAccounts);
-        }
+        await restoreSelectedPersonaResources(true);
         await extensionCommands.initializeAfterLogin(newUser.extension_session);
       }
       await extensionCommands.startPeriodicCheck();
@@ -998,7 +816,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.error("[AuthContext] Failed to initialize extension:", err);
     }
 
-    await syncPersonaContextFromLocalStorage(true);
+    await restoreSelectedPersonaResources(true);
     const accountProxyOpts = await resolveAccountProxy();
     await applyEffectiveProxy(accountProxyOpts);
     return true;
@@ -1017,10 +835,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       window.dispatchEvent(new Event("localStorageSync"));
     }
 
-    const storedFacebookAccounts = await appStorage.getItem<SocialAccount[]>("local:facebookAccounts");
-    if (storedFacebookAccounts) setFacebookAccounts(storedFacebookAccounts);
+    if (hasExtensionConfigId(storedUser.extension_session?.extension_config_id)) {
+      await readSessionAccounts(false).catch(() => undefined);
+    }
 
-    await syncPersonaContextFromLocalStorage(true);
+    await restoreSelectedPersonaResources(true);
 
     const storedActiveProxy = await appStorage.getItem<any>("local:activeProxy");
     if (storedActiveProxy) {

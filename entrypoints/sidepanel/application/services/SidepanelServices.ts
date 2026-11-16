@@ -21,6 +21,7 @@ import { ExternalServiceClient } from "./ExternalServiceClient";
 import { AuthClient } from "./AuthClient";
 import { PersonaClient } from "./PersonaClient";
 import { SocialAccountClient } from "./SocialAccountClient";
+import { SocialAccountResourceReader } from "./SocialAccountResourceReader";
 import { ScreenshotCaptureService } from "./ScreenshotCaptureService";
 import type {
   AppStoragePort,
@@ -71,6 +72,7 @@ export const externalServiceClient = new ExternalServiceClient(extensionRuntime)
 export const authClient = new AuthClient(extensionRuntime);
 export const personaClient = new PersonaClient(extensionRuntime);
 export const socialAccountClient = new SocialAccountClient(extensionRuntime);
+export const socialAccountResourceReader = new SocialAccountResourceReader(socialAccountClient, extensionStorage);
 export const screenshotCapture = new ScreenshotCaptureService(
   browserTabs,
   browserScripting,

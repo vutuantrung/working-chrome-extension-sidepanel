@@ -1,4 +1,3 @@
-import api from "../../infrastructure/api";
 import WorkspacePageHeader from "../../components/WorkspacePageHeader";
 import "../../assets/css/features/platform.css";
 import React, { useEffect, useState } from "react";
@@ -9,10 +8,9 @@ import {
 } from "../../../../entrypoints/sidepanel/application/services/SidepanelServices";
 import { useLocation, useNavigate } from "react-router-dom";
 import { setSelectedPlatformId } from "../../helpers/helpers";
-import { normalizePersonaSocialAccount } from "../../../../entrypoints/sidepanel/utils/resolveEffectiveProxy";
 import { PLATFORMS } from "../../helpers/helpers-ui";
 import { useAuth } from "../../contexts/AuthContext";
-import type { PlatformId, PlatformObject, SocialAccount } from "../../types/types";
+import type { PlatformId, PlatformObject } from "../../types/types";
 import PlatformSelect from "../../components/PlatformSelect";
 import { useTranslation } from "../../helpers/i18n";
 import { localizeOptions, LOGIN_ERROR_MESSAGES } from "../../helpers/constants";
@@ -52,14 +50,13 @@ const FacebookLoginMode: React.FC = () => {
     try {
       const key = chromeStorageKey(platform.id);
       const result = await extensionStorage.get(key);
-      const savedMode = result?.[key] as "auto" | "manual" | undefined;
+      const savedValue = result?.[key];
+      const savedMode = typeof savedValue === "object" && savedValue !== null ? savedValue.mode : savedValue;
       const hasActiveSession =
         localStorageService.getItem("fbLoginModeSelected") === "1";
 
-      if (savedMode && hasActiveSession) {
+      if ((savedMode === "auto" || savedMode === "manual") && hasActiveSession) {
         setBusyId(platform.id);
-
-        await refreshPersonaAccounts(platform.id);
 
         const loginResult = await loginWithMode(savedMode, platform.id);
         setBusyId(null);
@@ -84,13 +81,15 @@ const FacebookLoginMode: React.FC = () => {
         localStorageService.removeItem("fbLoginModeSelected");
 
         setErrorMessage(
-          localizeOptions(LOGIN_ERROR_MESSAGES, t).find(opt => opt.id === (result.reason ?? "unknown"))?.label ??
+          localizeOptions(LOGIN_ERROR_MESSAGES, t).find(opt => opt.id === (loginResult.reason ?? "unknown"))?.label ??
           localizeOptions(LOGIN_ERROR_MESSAGES, t).find(opt => opt.id === "unknown")?.label ?? ""
         );
         setStep("loginMode");
         return;
       }
-    } catch { }
+    } catch {
+      setErrorMessage(localizeOptions(LOGIN_ERROR_MESSAGES, t).find(opt => opt.id === "unknown")?.label ?? "");
+    } finally { setBusyId(null); }
 
     setStep("loginMode");
   };
@@ -114,11 +113,7 @@ const FacebookLoginMode: React.FC = () => {
 
     setBusyMode(mode);
 
-    if (mode === "auto") {
-      await refreshPersonaAccounts(selectedPlatform.id);
-    }
-
-    const result = await loginWithMode(mode, selectedPlatform.id);
+    const result = await loginWithMode(mode, selectedPlatform.id).catch(() => ({ success: false as const, reason: "unknown" as const }));
     setBusyMode(null);
 
     if (result.success === true) {
@@ -144,91 +139,6 @@ const FacebookLoginMode: React.FC = () => {
       localizeOptions(LOGIN_ERROR_MESSAGES, t).find(opt => opt.id === (result.reason ?? "unknown"))?.label ??
       localizeOptions(LOGIN_ERROR_MESSAGES, t).find(opt => opt.id === "unknown")?.label ?? ""
     );
-  };
-
-  const refreshPersonaAccounts = async (platformId: PlatformId): Promise<void> => {
-    try {
-      const storedUser = await appStorage.getItem<{
-        extension_session?: { extension_config_id?: string };
-      }>("local:user");
-      const extensionConfigId = storedUser?.extension_session?.extension_config_id;
-      if (extensionConfigId) {
-        console.log(
-          "[refreshPersonaAccounts] Skipping — extension config mode",
-        );
-        return;
-      }
-
-      const personaId = localStorageService.getItem("selectedPersonaId");
-      if (!personaId) return;
-
-      const response = await api.socialAccount.getSocialAccountsByPersona(personaId);
-      const accounts: SocialAccount[] = Array.isArray(response?.data)
-        ? response.data
-        : Array.isArray(response)
-          ? response
-          : [];
-
-      if (!accounts.length) return;
-
-      // Normalize: twitter → x
-      const normalized = accounts.map((a) => ({
-        ...a,
-        platform: a.platform === "twitter" ? "x" : a.platform,
-      }));
-
-      const rawAccounts = normalized.filter((a) => a.status === "active");
-
-      const activeAccounts = await Promise.all(
-        rawAccounts.map(async (account) => {
-          if (
-            account.proxy_id &&
-            (!account.proxy || Object.keys(account.proxy).length === 0)
-          ) {
-            try {
-              const proxyData = await api.proxy.getProxyInfo(account.proxy_id);
-              return { ...account, proxy: proxyData };
-            } catch (err) {
-              console.warn(
-                `Failed to fetch proxy info for account ${account.account_id}:`,
-                err,
-              );
-            }
-          }
-          return account;
-        }),
-      );
-
-      const sanitizedAccounts = activeAccounts
-        .map((a) => normalizePersonaSocialAccount(a))
-        .filter(
-          (a): a is NonNullable<typeof a> => a !== null,
-        ) as SocialAccount[];
-
-      // Always update allSocialAccounts with sanitized list
-      await appStorage.setItem("local:allSocialAccounts", sanitizedAccounts);
-      await appStorage.setItem("local:personaSocialAccounts", sanitizedAccounts);
-
-      // Update facebook-specific keys if applicable
-      const facebookAccounts = sanitizedAccounts.filter((a) => a.platform === "facebook");
-      if (facebookAccounts.length) {
-        await appStorage.setItem("local:facebookAccounts", facebookAccounts);
-        await appStorage.setItem(
-          "local:personaFacebookAccounts",
-          facebookAccounts,
-        );
-      }
-
-      console.log(
-        "[refreshPersonaAccounts] Loaded",
-        activeAccounts.length,
-        "accounts for platform:",
-        platformId,
-      );
-    } catch (err) {
-      console.warn("[refreshPersonaAccounts] Failed:", err);
-      // Non-fatal — loginWithMode will use whatever is already cached
-    }
   };
 
   const isModeBusy = busyMode !== null;
@@ -302,7 +212,7 @@ const FacebookLoginMode: React.FC = () => {
               <span>{t("selectPlatform")} ↓</span>
             </div>
             <PlatformSelect
-              busyId={null}
+              busyId={busyId}
               variant="switch"
               currentPlatformId="facebook"
               onSelectPlatform={(platform) => handleSelectPlatform(platform)} />
