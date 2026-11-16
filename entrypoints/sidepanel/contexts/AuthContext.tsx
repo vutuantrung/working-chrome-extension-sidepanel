@@ -878,7 +878,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.addEventListener("AUTH_EXPIRED", handleAuthExpiredEvent);
     // Listen for cross-context messages (from background/content scripts)
     const messageListener = (message: any) => {
-      if (message.type === "AUTH_EXPIRED") {
+      if (message.type === "AUTH_STATE_CHANGED" && message.reason === "recovery") {
+        void reconcileRecoveredState(message.success === true);
+      } else if (message.type === "AUTH_EXPIRED") {
         handleAuthExpiredEvent();
       }
     };
@@ -1232,6 +1234,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = () => endAuthenticationSession("logout");
+
+  // Background has already performed recovery. Read its authoritative state;
+  // never issue a second sign-in in response to a completion notification.
+  const reconcileRecoveredState = async (success: boolean) => {
+    if (recoveryInFlight.current || sessionEndInFlight.current ||
+        autoAuthInFlight.current || manualLoginInFlight.current) return;
+    recoveryInFlight.current = true;
+    try {
+      const state = await authClient.getState();
+      if (!state.user) {
+        resetSignedOutUi();
+        navigate("/login");
+      } else {
+        authenticatedRef.current = true;
+        setUser(state.user);
+        setIsApikeySession(state.isApikeySession);
+      }
+      if (!success) setError("Session recovery failed. Please try again.");
+    } catch {
+      setError("Unable to synchronize authentication state.");
+    } finally {
+      recoveryInFlight.current = false;
+    }
+  };
 
   const handleSessionExpired = async () => {
     if (!authenticatedRef.current || recoveryInFlight.current || sessionEndInFlight.current ||
