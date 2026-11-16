@@ -20,6 +20,10 @@ export type SessionEndResult = {
   signoutConfirmed: boolean | null;
 };
 
+export type RecoveryResult =
+  | { status: "recovered"; session: AuthLoginResult }
+  | { status: "signed_out"; snapshotPreserved: boolean };
+
 type AuthResponse<T> = { success: true; data: T } | { success: false; error?: string; code?: string };
 
 export class AuthClient {
@@ -70,6 +74,13 @@ export class AuthClient {
 
   restart(extensionId: string): Promise<SessionEndResult> {
     return this.endSession("AUTH_RESTART", extensionId);
+  }
+
+  async recoverSession(extensionId: string, allowLegacyCredentials = false): Promise<RecoveryResult> {
+    const result = await this.request<RecoveryResult>("AUTH_RECOVER_SESSION", { extensionId, allowLegacyCredentials });
+    if (result.status === "signed_out" && typeof result.snapshotPreserved === "boolean") return result;
+    if (result.status === "recovered" && result.session?.user?.id) return result;
+    throw new Error("Invalid session recovery response");
   }
 
   getState(): Promise<AuthState> {

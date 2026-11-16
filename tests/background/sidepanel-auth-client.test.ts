@@ -84,3 +84,34 @@ describe("R1.3 session end client contract", () => {
     await expect(client.logout("ext")).rejects.toThrow("Session cleanup failed");
   });
 });
+
+describe("R1.4 session recovery client", () => {
+  it("requests recovery without credentials", async () => {
+    const { client, sendMessage } = setup();
+    const data = { status: "recovered", session: { user: { id: "user" }, isApikeySession: true } };
+    sendMessage.mockResolvedValue({ success: true, data });
+    expect(await client.recoverSession("ext", true)).toEqual(data);
+    expect(sendMessage).toHaveBeenCalledExactlyOnceWith({
+      type: "AUTH_RECOVER_SESSION", inputs: { extensionId: "ext", allowLegacyCredentials: true },
+    });
+  });
+  it("recognizes acknowledged signed-out state", async () => {
+    const { client, sendMessage } = setup();
+    const data = { status: "signed_out", snapshotPreserved: false };
+    sendMessage.mockResolvedValue({ success: true, data });
+    expect(await client.recoverSession("ext")).toEqual(data);
+  });
+  it("rejects unknown outcome and malformed recovered session", async () => {
+    const { client, sendMessage } = setup();
+    sendMessage.mockResolvedValueOnce({ success: true, data: { status: "unknown" } })
+      .mockResolvedValueOnce({ success: true, data: { status: "recovered" } });
+    await expect(client.recoverSession("ext")).rejects.toThrow("Invalid session recovery response");
+    await expect(client.recoverSession("ext")).rejects.toThrow("Invalid session recovery response");
+  });
+  it("propagates cleanup failure without retry", async () => {
+    const { client, sendMessage } = setup();
+    sendMessage.mockResolvedValue({ success: false, error: "Session cleanup failed" });
+    await expect(client.recoverSession("ext")).rejects.toThrow("Session cleanup failed");
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+});

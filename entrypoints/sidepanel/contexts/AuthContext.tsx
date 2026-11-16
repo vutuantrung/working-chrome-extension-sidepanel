@@ -21,7 +21,6 @@ import api from "../infrastructure/api";
 import type { AuthLoginResult } from "../application/services/AuthClient";
 import {
   getPlatformCookieDomains,
-  SOCIAL_COOKIE_DOMAINS,
 } from "../../sidepanel/utils/social-cookie-domains";
 import {
   getSelectedPlatformId,
@@ -135,30 +134,6 @@ const hydrateAccountsWithProxy = async (accounts: SocialAccount[]): Promise<Soci
   );
 };
 
-const captureSocialCookiesByDomain = async (): Promise<Record<string, BrowserCookie[]>> => {
-  const out: Record<string, BrowserCookie[]> = {};
-  await Promise.all(
-    SOCIAL_COOKIE_DOMAINS.map(
-      (domain) =>
-        new Promise<void>((resolve) => {
-          browserCookies
-            .getAllByDomain(domain)
-            .then((cookies) => {
-              if (cookies.length) out[domain] = cookies;
-            })
-            .finally(resolve);
-        }),
-    ),
-  );
-  return out;
-};
-
-const persistManualSocialCookieSnapshot = async () => {
-  const byDomain = await captureSocialCookiesByDomain();
-  if (!Object.keys(byDomain).length) return;
-  await appStorage.setItem(MANUAL_PLATFORM_COOKIES_KEY, JSON.stringify(byDomain));
-};
-
 const getLoginModeKey = (platformId: string) => platformId === "facebook" ? "fbLoginMode" : `${platformId}LoginMode`;
 
 const readPlatformLoginMode = async (platformId: string): Promise<{ mode: "auto" | "manual"; account_id?: string }> => {
@@ -256,6 +231,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const autoAuthInFlight = useRef<Promise<void> | null>(null);
   const manualLoginInFlight = useRef(false);
   const sessionEndInFlight = useRef(false);
+  const recoveryInFlight = useRef(false);
   const authenticatedRef = useRef(false);
   const navigate = useNavigate();
 
@@ -894,7 +870,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const handleAuthExpiredEvent = () => {
       // A 401 from an in-progress sign-in is not an existing-session expiry.
-      if (!authenticatedRef.current || autoAuthInFlight.current || manualLoginInFlight.current || sessionEndInFlight.current) return;
+      if (!authenticatedRef.current || autoAuthInFlight.current || manualLoginInFlight.current || sessionEndInFlight.current || recoveryInFlight.current) return;
       void handleSessionExpired();
     };
 
@@ -1111,16 +1087,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return true;
   };
 
-  // Legacy expiry-only credential retrieval; migrate with R1.4.
-  const getStoredApikey = async (): Promise<string | null> => {
-    try {
-      const result = await extensionStorage.get("apikey");
-      return (result?.apikey as string) || null;
-    } catch {
-      return null;
-    }
-  };
-
   const restoreExistingSession = async (storedUser: User, storedIsApikeySession: boolean) => {
     // Restore existing session (user previously logged in)
     authenticatedRef.current = true;
@@ -1162,7 +1128,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const checkAuthAndRestore = (initial = false): Promise<void> => {
     if (autoAuthInFlight.current) return autoAuthInFlight.current;
-    if (authenticatedRef.current || manualLoginInFlight.current || sessionEndInFlight.current) {
+    if (authenticatedRef.current || manualLoginInFlight.current || sessionEndInFlight.current || recoveryInFlight.current) {
       if (initial) setLoading(false);
       return Promise.resolve();
     }
@@ -1201,7 +1167,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Manual sign-in cannot overlap a Sidepanel auto-login/setup workflow.
   const login = async (username: string, password: string): Promise<boolean> => {
-    if (autoAuthInFlight.current || manualLoginInFlight.current || sessionEndInFlight.current) {
+    if (autoAuthInFlight.current || manualLoginInFlight.current || sessionEndInFlight.current || recoveryInFlight.current) {
       setError("Authentication in progress. Please try again.");
       return false;
     }
@@ -1240,7 +1206,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const endAuthenticationSession = async (mode: "logout" | "restart"): Promise<void> => {
-    if (sessionEndInFlight.current) return;
+    if (sessionEndInFlight.current || recoveryInFlight.current) return;
     if (autoAuthInFlight.current || manualLoginInFlight.current) {
       setError("Authentication in progress. Please try again.");
       return;
@@ -1268,93 +1234,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = () => endAuthenticationSession("logout");
 
   const handleSessionExpired = async () => {
+    if (!authenticatedRef.current || recoveryInFlight.current || sessionEndInFlight.current ||
+        autoAuthInFlight.current || manualLoginInFlight.current) return;
+
+    recoveryInFlight.current = true;
     try {
-      // 1. Try apikey re-login first — fastest path, no stored credentials needed.
-      //    The desktop app keeps the apikey fresh in chrome.storage.local.
-      const apikey = await getStoredApikey();
-      if (apikey) {
-        try {
-          const loginResponse = await authClient.loginByApiKey(
-            apikey,
-            extensionId || extensionCommands.getExtensionId(),
-          );
-          await applyAuthenticatedSession(loginResponse);
-          console.log(
-            "[AuthContext] Session expired — re-logged in via apikey",
-          );
-          return;
-        } catch (err) {
-          console.warn(
-            "[AuthContext] Apikey re-login failed, falling back:",
-            err,
-          );
-        }
+      // Only the UI-owned selection flag crosses the boundary; credentials do not.
+      const allowLegacyCredentials = Boolean(localStorageService.getItem("fbLoginModeSelected"));
+      const result = await authClient.recoverSession(
+        extensionCommands.getExtensionId(), allowLegacyCredentials,
+      );
+      if (result.status === "recovered") {
+        await applyAuthenticatedSession(result.session);
+      } else {
+        resetSignedOutUi();
+        navigate("/login");
       }
-
-      // 2. Fallback: try username/password auto re-login (only if both are stored).
-      //    NOTE: password is no longer stored for security; this branch only fires
-      //    if an older storage entry still contains a password field.
-      const stored = await extensionStorage.get("draftCredentials");
-      const hasSelectedFbMode = localStorageService.getItem("fbLoginModeSelected");
-      const remembered: any = stored?.draftCredentials;
-
-      if (hasSelectedFbMode && remembered?.username && remembered?.password) {
-        console.log(
-          "[AuthContext] Session expired, attempting auto re-login with username/password...",
-        );
-        try {
-          const success = await login(remembered.username, remembered.password);
-          if (success) {
-            console.log("[AuthContext] Auto re-login successful");
-            return;
-          }
-        } catch (err) {
-          console.warn(
-            "[AuthContext] Auto re-login failed, proceeding to logout:",
-            err,
-          );
-        }
-      }
-
-      // 3. Full logout cleanup.
-      const fbLoginMode: any = await extensionStorage
-        .get("fbLoginMode")
-        .then((r) => r.fbLoginMode || null);
-      if (fbLoginMode?.mode === "manual") {
-        try {
-          await persistManualSocialCookieSnapshot();
-        } catch (err) {
-          console.warn("[AuthContext] Failed to capture cookies:", err);
-        }
-      }
-
-      try {
-        await extensionCommands.clearDataAfterLogout();
-      } catch (err) {
-        console.error("[AuthContext] Failed to clear extension data:", err);
-      }
-
-      localStorageService.removeItem("fbLoginModeSelected");
-      localStorageService.removeItem("selectedPersonaId");
-      localStorageService.removeItem("selectedPersona");
-      await appStorage.removeItem("local:user");
-      await appStorage.removeItem("local:facebookAccounts");
-      await appStorage.removeItem("local:extensionProxy");
-      await appStorage.removeItem("local:personaProxy");
-      await appStorage.removeItem("local:personaFacebookAccounts");
-      await appStorage.removeItem("local:selectedPersonaId");
-      await appStorage.removeItem("local:profile");
-      await appStorage.removeItem("local:profileId");
-      await appStorage.removeItem("local:activeProxy");
-      authenticatedRef.current = false;
-      setUser(null);
-      setIsApikeySession(false);
-      setFacebookAccounts([]);
-      setExtensionProxy(null);
-
-      navigate("/login");
-    } catch (e: any) {
-      console.error("[AuthContext] Session expiry cleanup failed:", e);
+    } catch {
+      setError("Session recovery failed. Please try again.");
+    } finally {
+      recoveryInFlight.current = false;
     }
   };
 
