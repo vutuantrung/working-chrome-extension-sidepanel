@@ -1,9 +1,9 @@
 import type { CSSProperties } from "react";
-import type { Persona } from "../../types/types";
+import type { PersonaSummary } from "../../types/PersonaContracts";
 import "../../assets/css/components/Persona.css";
 
 interface AvatarProps {
-    persona: Persona;
+    persona: PersonaSummary;
     size?: number;
 }
 

@@ -1,5 +1,5 @@
 import { useTranslation } from "../../helpers/i18n";
-import type { Persona } from "../../types/types";
+import type { PersonaSummary } from "../../types/PersonaContracts";
 import Avatar from "./Avatar";
 import GenderDot from "./GenderDot";
 import StatusBadge from "./StatusBadge";
@@ -7,7 +7,7 @@ import { countryFlag } from "../../helpers/helpers";
 import "../../assets/css/components/Persona.css";
 
 interface PersonaCardProps {
-    persona: Persona;
+    persona: PersonaSummary;
     selected: boolean;
     onSelect: () => void;
 }

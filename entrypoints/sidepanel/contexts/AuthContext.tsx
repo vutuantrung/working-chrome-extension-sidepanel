@@ -10,6 +10,7 @@ import { useNavigate } from "react-router-dom";
 import {
   appStorage,
   authClient,
+  personaClient,
   browserCookies,
   browserTabs,
   extensionCommands,
@@ -25,7 +26,6 @@ import {
 import {
   getSelectedPlatformId,
   normalizeSameSite,
-  parseList,
   parsePersonaRecord
 } from "../helpers/helpers";
 import type {
@@ -478,15 +478,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return s.length > 0 ? s : undefined;
   };
 
-  const persistSelectedPersonaId = async (persona: unknown) => {
-    const personaId =
-      getPersonaId(persona) ??
-      localStorageService.getItem("selectedPersonaId") ??
-      undefined;
-    if (!personaId) return;
-
+  // Document-local mirrors remain until route/platform callers migrate.
+  const mirrorPersonaSelection = (persona: unknown, personaId: string) => {
     localStorageService.setItem("selectedPersonaId", personaId);
-    await appStorage.setItem("local:selectedPersonaId", personaId);
+    localStorageService.setItem("selectedPersona", JSON.stringify(persona));
+    window.dispatchEvent(new Event("localStorageSync"));
+  };
+
+  const clearPersonaMirror = () => {
+    localStorageService.removeItem("selectedPersonaId");
+    localStorageService.removeItem("selectedPersona");
+    window.dispatchEvent(new Event("localStorageSync"));
+  };
+
+  // Transitional raw detail fetch for existing resource setup (R2.3/R3/R4).
+  const loadSelectedPersona = async (personaId: string) => {
+    const persona = parsePersonaRecord(await api.persona.getPersonaById(personaId));
+    if (!persona || getPersonaId(persona) !== personaId) throw new Error("Invalid persona details");
+    return persona;
   };
 
   const resolvePersonaProxy = async (
@@ -537,46 +546,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return {};
   };
 
-  const storePersonaSelection = async (persona: unknown) => {
-    await persistSelectedPersonaId(persona);
+  const ensureDefaultPersonaForExtensionConfig = async (): Promise<void> => {
     try {
-      localStorageService.setItem("selectedPersona", JSON.stringify(persona));
-    } catch { }
-  };
-
-  const ensureDefaultPersonaForExtensionConfig = async (userId: string): Promise<void> => {
-    const existing = localStorageService.getItem("selectedPersonaId");
-    if (existing) return;
-
-    try {
-      const data = await api.persona.getPersonas(userId);
-      const list = parseList(data?.data ?? data);
-      let persona: unknown = list[0] ?? null;
-
-      if (!persona) {
-        const created = await api.persona.createPersona();
-        persona = created?.data ?? created;
-      }
-
-      if (persona) {
-        await storePersonaSelection(persona);
-        const personaId = getPersonaId(persona);
-        if (personaId) {
-          try {
-            await api.extensionUser.activatePersonaSession(personaId);
-          } catch (err: any) {
-            console.warn(
-              "[AuthContext] activePersonaSession (extension config):",
-              err?.response?.data || err?.message || err,
-            );
-          }
-        }
-      }
-    } catch (err: any) {
-      console.warn(
-        "[AuthContext] ensureDefaultPersonaForExtensionConfig:",
-        err?.response?.data || err?.message || err,
-      );
+      const prepared = await personaClient.prepareSelection();
+      const id = prepared.recommendedPersonaId;
+      if (!id) return;
+      const selected = await personaClient.select(id, prepared.state.revision);
+      if (selected.selectedPersonaId !== id) throw new Error("Persona selection not acknowledged");
+      const persona = await loadSelectedPersona(id);
+      // Legacy activation retained until R2.3. Do not activate an already restored selection again.
+      if (!prepared.state.selectedPersonaId) await api.extensionUser.activatePersonaSession(id);
+      mirrorPersonaSelection(persona, id);
+    } catch {
+      console.warn("[AuthContext] Default persona preparation failed");
     }
   };
 
@@ -601,12 +583,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     },
   ) => {
     const useExtensionConfig = await readHasExtensionConfig();
-    if (useExtensionConfig) {
-      await storePersonaSelection(persona);
-      return;
-    }
-
-    await persistSelectedPersonaId(persona);
+    if (useExtensionConfig) return;
 
     const personaId = getPersonaId(persona);
     const personaProxy = personaId
@@ -657,25 +634,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const applyPersonaOnSelect = async (persona: unknown) => {
-    const useExtensionConfig = await readHasExtensionConfig();
-    let resolved = persona;
-
-    const personaId = getPersonaId(persona);
-    if (personaId) {
-      try {
-        const raw = await api.persona.getPersonaById(personaId);
-        resolved = parsePersonaRecord(raw) ?? persona;
-      } catch {
-        resolved = persona;
-      }
+    const id = getPersonaId(persona);
+    if (!id) throw new Error("Invalid persona ID");
+    const selected = await personaClient.select(id);
+    if (selected.selectedPersonaId !== id) throw new Error("Persona selection not acknowledged");
+    const resolved = await loadSelectedPersona(id);
+    if (!(await readHasExtensionConfig())) {
+      await applyPersonaSession(resolved, { applyAutoCookies: false });
     }
-
-    await storePersonaSelection(resolved);
-    if (useExtensionConfig) {
-      return;
-    }
-
-    await applyPersonaSession(resolved, { applyAutoCookies: false });
+    mirrorPersonaSelection(resolved, id);
   };
 
   const switchPersona = async (personaId: string): Promise<{ success: boolean; error?: string }> => {
@@ -693,8 +660,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           error: "Invalid persona id."
         };
       }
-      const localSelectedId = localStorageService.getItem("selectedPersonaId");
-      const previousId = String(localSelectedId).trim();
+      const currentSelection = await personaClient.getState();
+      const previousId = currentSelection.selectedPersonaId ?? "";
 
 
       if (previousId && previousId !== currentId) {
@@ -712,13 +679,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         };
       }
 
-      localStorageService.setItem("selectedPersonaId", currentId);
-      localStorageService.setItem("selectedPersona", JSON.stringify(persona));
-
-      await appStorage.setItem("local:selectedPersonaId", currentId);
+      const selection = await personaClient.select(currentId, currentSelection.revision);
+      if (selection.selectedPersonaId !== currentId) throw new Error("Persona selection not acknowledged");
       await appStorage.removeItem("local:profile");
       await appStorage.removeItem("local:profileId");
 
+      mirrorPersonaSelection(persona, currentId);
       await applyPersonaSession(persona, { reapplyPlatformLogin: true });
       try {
         const user = await appStorage.getItem<User>("local:user");
@@ -744,12 +710,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const syncPersonaContextFromLocalStorage = async (updateState = false) => {
     try {
-      const localPersona = localStorageService.getItem("selectedPersona");
-      if (!localPersona) return;
-      const persona = JSON.parse(localPersona);
-      await persistSelectedPersonaId(persona);
-
-      const personaId = getPersonaId(persona);
+      const selection = await personaClient.getState();
+      const personaId = selection.selectedPersonaId;
+      if (!personaId) { clearPersonaMirror(); return; }
+      const persona = await loadSelectedPersona(personaId);
+      mirrorPersonaSelection(persona, personaId);
       const personaProxy = personaId
         ? await resolvePersonaProxy(persona, personaId, { skipIfCached: true })
         : extractPersonaProxy(persona);
@@ -1053,7 +1018,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setFacebookAccounts(facebookAccts);
         await appStorage.setItem("local:facebookAccounts", facebookAccts);
 
-        await ensureDefaultPersonaForExtensionConfig(newUser.id);
+        await ensureDefaultPersonaForExtensionConfig();
         // Notify AppRoutes so it picks up the newly-set selectedPersonaId
         // (ensureDefaultPersonaForExtensionConfig persists the selected persona in
         // the same tab, which doesn't fire the 'storage' event).
@@ -1097,7 +1062,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsApikeySession(storedIsApikeySession === true);
 
     if (hasExtensionConfigId(storedUser.extension_session?.extension_config_id)) {
-      await ensureDefaultPersonaForExtensionConfig(storedUser.id);
+      await ensureDefaultPersonaForExtensionConfig();
       // Sync React state in AppRoutes after persona ID may have been set
       window.dispatchEvent(new Event("localStorageSync"));
     }
