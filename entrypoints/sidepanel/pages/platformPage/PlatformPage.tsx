@@ -75,8 +75,9 @@ const SwitchPlatform: React.FC = () => {
     } catch { }
 
     setErrorMessage(
-      localizeOptions(LOGIN_ERROR_MESSAGES, t).find(opt => opt.id === (result.reason ?? "unknown"))?.label ??
-      localizeOptions(LOGIN_ERROR_MESSAGES, t).find(opt => opt.id === "unknown")?.label,
+      localizeOptions(LOGIN_ERROR_MESSAGES, t).find(opt => opt.id === (result.reason ?? "unknown"))?.label
+      ?? localizeOptions(LOGIN_ERROR_MESSAGES, t).find(opt => opt.id === "unknown")?.label
+      ?? ""
     );
   };
 

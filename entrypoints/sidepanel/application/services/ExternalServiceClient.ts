@@ -3,7 +3,7 @@ import type { ExtensionRuntimePort } from "../../types/BrowserPorts";
 export type ExternalServiceName =
   | "login" | "loginByApiKey" | "logout" | "updateExtensionSession"
   | "getExtensionConfigInfo" | "deactivatePersona" | "activatePersonaSession"
-  | "getPersonas" | "createPersona" | "getPersonaById"
+  | "getPersonas" | "getPersonaById" | "createPersona"
   | "getProxiesByPersona" | "getProxyInfo"
   | "getSocialAccountProxy" | "getSocialAccountInfo" | "getSocialAccountGroups"
   | "getSocialAccountsByPersona" | "getProfileCases" | "createProfileCase"
@@ -14,7 +14,7 @@ export class ExternalServiceClient {
   constructor(
     private readonly runtime: ExtensionRuntimePort,
     private readonly timeoutMs = 65_000,
-  ) {}
+  ) { }
 
   async request<T = any>(
     serviceName: ExternalServiceName,

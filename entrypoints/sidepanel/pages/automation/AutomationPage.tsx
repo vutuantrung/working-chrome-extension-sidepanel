@@ -13,6 +13,7 @@ import {
 import { AutomationSubTab } from "../../types/types";
 import TopTabs from "../../components/TopTabs";
 import { AUTOMATION_TABS, localizeOptions } from "../../helpers/constants";
+import api from "../../infrastructure/api";
 
 interface AutomationPageProps {
   activeView: AutomationSubTab;
@@ -111,7 +112,7 @@ function AutomationPage({ activeView, setActiveSubTab }: AutomationPageProps) {
       };
 
       // Update API
-      await updateExtensionSession(userInfo.extension_session.id, apiPayload);
+      await api.extensionUser.updateExtensionSession(userInfo.extension_session.id, apiPayload);
 
       // Sync extension state
       try {

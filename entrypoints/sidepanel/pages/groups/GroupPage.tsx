@@ -108,11 +108,13 @@ function GroupPage({ dataSource = getMemberSourcesGroup }: GroupPageProps = {}) 
   // Status counts apply to the current API page, not the entire dataset.
   const taskStatusCounts: Record<"all" | InfiltrationStatus, number> = {
     all: totalCount,
-    requested: profiles.filter((item) => getInfiltrationStatus(item) === "requested").length,
-    not_joined: profiles.filter((item) => getInfiltrationStatus(item) === "not_joined").length,
-    joined: profiles.filter((item) => getInfiltrationStatus(item) === "joined").length,
+    requested: profiles.filter((item: any) => getInfiltrationStatus(item) === "requested").length,
+    not_joined: profiles.filter((item: any) => getInfiltrationStatus(item) === "not_joined").length,
+    joined: profiles.filter((item: any) => getInfiltrationStatus(item) === "joined").length,
   };
-  const visibleProfiles = statusFilter === "all" ? profiles : profiles.filter((item) => getInfiltrationStatus(item) === statusFilter);
+  const visibleProfiles = statusFilter === "all"
+    ? profiles
+    : profiles.filter((item: any) => getInfiltrationStatus(item) === statusFilter);
 
   const handleSearch = (v: string) => { setSearch(v); setPage(1); };
   const handleStatusFilter = (s: any) => { setStatusFilter(s); };
@@ -168,7 +170,7 @@ function GroupPage({ dataSource = getMemberSourcesGroup }: GroupPageProps = {}) 
             <div className="group-empty"><FiRefreshCw className="group-empty__icon group-empty__icon--spin" /><strong>{t("loadingGroups")}</strong></div>
           ) : error || visibleProfiles.length === 0 ? (
             <div className="group-empty"><FiAlertCircle className="group-empty__icon" /><strong>{error ? t("failedGroups") : t("noGroups")}</strong><span>{error ? t("failedGroupsHint") : t("retryHint")}</span>{error && <button type="button" onClick={() => fetchProfiles()}>{t("retry")}</button>}</div>
-          ) : visibleProfiles.map((profile) => <AssignItem key={profile.id} {...profile} />)}
+          ) : visibleProfiles.map((profile: any) => <AssignItem key={profile.id} {...profile} />)}
         </div>
       </section>
 

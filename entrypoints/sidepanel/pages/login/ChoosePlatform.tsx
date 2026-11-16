@@ -85,7 +85,7 @@ const FacebookLoginMode: React.FC = () => {
 
         setErrorMessage(
           localizeOptions(LOGIN_ERROR_MESSAGES, t).find(opt => opt.id === (result.reason ?? "unknown"))?.label ??
-          localizeOptions(LOGIN_ERROR_MESSAGES, t).find(opt => opt.id === "unknown")?.label,
+          localizeOptions(LOGIN_ERROR_MESSAGES, t).find(opt => opt.id === "unknown")?.label ?? ""
         );
         setStep("loginMode");
         return;
@@ -142,7 +142,7 @@ const FacebookLoginMode: React.FC = () => {
 
     setErrorMessage(
       localizeOptions(LOGIN_ERROR_MESSAGES, t).find(opt => opt.id === (result.reason ?? "unknown"))?.label ??
-      localizeOptions(LOGIN_ERROR_MESSAGES, t).find(opt => opt.id === "unknown")?.label,
+      localizeOptions(LOGIN_ERROR_MESSAGES, t).find(opt => opt.id === "unknown")?.label ?? ""
     );
   };
 
