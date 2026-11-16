@@ -14,6 +14,12 @@ export type AutoLoginResult =
   | { status: "restored"; user: User; isApikeySession: boolean }
   | { status: "authenticated"; session: AuthLoginResult };
 
+export type SessionEndResult = {
+  cleared: true;
+  snapshotPreserved: boolean;
+  signoutConfirmed: boolean | null;
+};
+
 type AuthResponse<T> = { success: true; data: T } | { success: false; error?: string; code?: string };
 
 export class AuthClient {
@@ -50,6 +56,20 @@ export class AuthClient {
 
   autoLogin(extensionId: string): Promise<AutoLoginResult> {
     return this.request("AUTH_AUTO_LOGIN", { extensionId });
+  }
+
+  private async endSession(type: "AUTH_LOGOUT" | "AUTH_RESTART", extensionId: string): Promise<SessionEndResult> {
+    const result = await this.request<SessionEndResult>(type, { extensionId });
+    if (result.cleared !== true) throw new Error("Background did not acknowledge session cleanup");
+    return result;
+  }
+
+  logout(extensionId: string): Promise<SessionEndResult> {
+    return this.endSession("AUTH_LOGOUT", extensionId);
+  }
+
+  restart(extensionId: string): Promise<SessionEndResult> {
+    return this.endSession("AUTH_RESTART", extensionId);
   }
 
   getState(): Promise<AuthState> {

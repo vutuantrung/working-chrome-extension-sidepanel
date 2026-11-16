@@ -57,3 +57,30 @@ describe("R1.2 auto-login client contract", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("R1.3 session end client contract", () => {
+  it("sends logout and unwraps local cleanup acknowledgment", async () => {
+    const { client, sendMessage } = setup();
+    const data = { cleared: true, snapshotPreserved: false, signoutConfirmed: false };
+    sendMessage.mockResolvedValue({ success: true, data });
+    expect(await client.logout("ext")).toEqual(data);
+    expect(sendMessage).toHaveBeenCalledExactlyOnceWith({ type: "AUTH_LOGOUT", inputs: { extensionId: "ext" } });
+  });
+  it("sends restart without credentials or cookie data", async () => {
+    const { client, sendMessage } = setup();
+    const data = { cleared: true, snapshotPreserved: true, signoutConfirmed: null };
+    sendMessage.mockResolvedValue({ success: true, data });
+    expect(await client.restart("ext")).toEqual(data);
+    expect(sendMessage).toHaveBeenCalledExactlyOnceWith({ type: "AUTH_RESTART", inputs: { extensionId: "ext" } });
+  });
+  it("rejects missing cleanup acknowledgment", async () => {
+    const { client, sendMessage } = setup();
+    sendMessage.mockResolvedValue({ success: true, data: { cleared: false } });
+    await expect(client.restart("ext")).rejects.toThrow("did not acknowledge");
+  });
+  it("rejects structured cleanup errors", async () => {
+    const { client, sendMessage } = setup();
+    sendMessage.mockResolvedValue({ success: false, error: "Session cleanup failed" });
+    await expect(client.logout("ext")).rejects.toThrow("Session cleanup failed");
+  });
+});
