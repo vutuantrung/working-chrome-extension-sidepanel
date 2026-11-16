@@ -548,30 +548,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const ensureDefaultPersonaForExtensionConfig = async (): Promise<void> => {
     try {
-      const prepared = await personaClient.prepareSelection();
-      const id = prepared.recommendedPersonaId;
-      if (!id) return;
-      const selected = await personaClient.select(id, prepared.state.revision);
-      if (selected.selectedPersonaId !== id) throw new Error("Persona selection not acknowledged");
-      const persona = await loadSelectedPersona(id);
-      // Legacy activation retained until R2.3. Do not activate an already restored selection again.
-      if (!prepared.state.selectedPersonaId) await api.extensionUser.activatePersonaSession(id);
-      mirrorPersonaSelection(persona, id);
+      const selected = await personaClient.ensureDefault();
+      const id = selected.selectedPersonaId;
+      if (!id) throw new Error("Default persona activation not acknowledged");
+      mirrorPersonaSelection(await loadSelectedPersona(id), id);
     } catch {
-      console.warn("[AuthContext] Default persona preparation failed");
-    }
-  };
-
-  const activatePersonaSessionApi = async (personaId: string) => {
-    const id = String(personaId).trim();
-    if (!id) return;
-    try {
-      await api.extensionUser.activatePersonaSession(id);
-    } catch (err: any) {
-      console.warn(
-        "[AuthContext] activePersonaSession failed:",
-        err?.response?.data || err?.message || err,
-      );
+      clearPersonaMirror();
+      console.warn("[AuthContext] Default persona activation failed");
     }
   };
 
@@ -636,8 +619,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const applyPersonaOnSelect = async (persona: unknown) => {
     const id = getPersonaId(persona);
     if (!id) throw new Error("Invalid persona ID");
-    const selected = await personaClient.select(id);
-    if (selected.selectedPersonaId !== id) throw new Error("Persona selection not acknowledged");
+    await personaClient.activate(id);
     const resolved = await loadSelectedPersona(id);
     if (!(await readHasExtensionConfig())) {
       await applyPersonaSession(resolved, { applyAutoCookies: false });
@@ -712,7 +694,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const selection = await personaClient.getState();
       const personaId = selection.selectedPersonaId;
-      if (!personaId) { clearPersonaMirror(); return; }
+      if (!personaId || selection.status === "reconciliation_required") { clearPersonaMirror(); return; }
       const persona = await loadSelectedPersona(personaId);
       mirrorPersonaSelection(persona, personaId);
       const personaProxy = personaId

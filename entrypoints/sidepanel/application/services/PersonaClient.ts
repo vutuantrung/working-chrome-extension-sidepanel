@@ -19,6 +19,22 @@ export class PersonaClient {
   prepareSelection(): Promise<PersonaPreparation> {
     return this.request("PERSONA_PREPARE_SELECTION");
   }
+  private async requireActive(result: Promise<PersonaState>, personaId?: string): Promise<PersonaState> {
+    const state = await result;
+    if (state.status !== "active" || !state.selectedPersonaId ||
+        (personaId !== undefined && state.selectedPersonaId !== personaId)) {
+      throw new Error("Persona activation not acknowledged");
+    }
+    return state;
+  }
+  activate(personaId: string, expectedRevision?: number): Promise<PersonaState> {
+    return this.requireActive(this.request<PersonaState>("PERSONA_ACTIVATE", {
+      personaId, ...(expectedRevision !== undefined ? { expectedRevision } : {}),
+    }), personaId);
+  }
+  ensureDefault(): Promise<PersonaState> {
+    return this.requireActive(this.request<PersonaState>("PERSONA_ENSURE_DEFAULT"));
+  }
   select(personaId: string, expectedRevision?: number): Promise<PersonaState> {
     return this.request("PERSONA_SELECT", { personaId, ...(expectedRevision !== undefined ? { expectedRevision } : {}) });
   }

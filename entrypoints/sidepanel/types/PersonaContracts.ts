@@ -14,7 +14,7 @@ export type PersonaState = {
   mode: "config_bound" | "persona_bound";
   canSwitch: boolean;
   revision: number;
-  status: "unselected" | "selected";
+  status: "unselected" | "selected" | "active" | "reconciliation_required";
 };
 export type PersonaPreparation = {
   state: PersonaState;

@@ -1,4 +1,3 @@
-import api from "../../infrastructure/api";
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../contexts/AuthContext";
@@ -32,10 +31,6 @@ const SelectPersona: React.FC = () => {
     setErrorMsg(null);
 
     try {
-      // R2.3 will combine validated selection and activation in Background.
-      const selection = await personaClient.select(persona.id);
-      if (selection.selectedPersonaId !== persona.id) throw new Error("Persona selection not acknowledged");
-      await api.extensionUser.activatePersonaSession(persona.id);
       await applyPersonaOnSelect(persona);
       navigate("/facebook-login-mode");
     } catch (err) {
